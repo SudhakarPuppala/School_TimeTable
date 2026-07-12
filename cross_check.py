@@ -16,6 +16,10 @@ SCHOOLS = {
     "NRCS": "NRCS/Requirements/NRCS_information_New.xlsx",
 }
 
+# Normalised names confirmed to be DIFFERENT people at each school (same name by
+# coincidence) — excluded from the shared-teacher clash check.
+CONFIRMED_DISTINCT = {"LALITHA"}   # NRHS M.LALITHA != NRCS Lalitha
+
 
 def norm(name):
     n = re.sub(r"^[A-Za-z]\.", "", str(name).strip())   # drop leading "X."
@@ -51,7 +55,7 @@ def main():
 
     occ_h, disp_h = data["NRHS"]
     occ_c, disp_c = data["NRCS"]
-    shared = sorted(set(occ_h) & set(occ_c))
+    shared = sorted((set(occ_h) & set(occ_c)) - CONFIRMED_DISTINCT)
 
     print("=" * 64)
     print("CROSS-SCHOOL CONFLICT CHECK  (NRHS ∩ NRCS, matched by name)")
