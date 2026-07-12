@@ -21,6 +21,7 @@ from timetable.model import (load_model, DAYS, SUBJ_ABBR, CLASS_DISPLAY,
 from timetable.solver import solve
 from timetable.verify import verify
 from timetable.writer import write_workbook
+from timetable.pdf import write_pdf
 
 DEFAULT_INPUT = "NRHS/Requirements/NRHS_Information.xlsx"
 PLABEL = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "Study Hour"]
@@ -185,8 +186,11 @@ if generate and "edited" in st.session_state:
             res = run_solver(tmp, seconds)
             out = os.path.join(tempfile.gettempdir(), "NRHS_Timetable.xlsx")
             write_workbook(out, res[0], res[1])
+            pdf_out = os.path.join(tempfile.gettempdir(), "NRHS_Timetable.pdf")
+            write_pdf(pdf_out, res[0], res[1])
             st.session_state.result = res
             st.session_state.out = out
+            st.session_state.pdf = pdf_out
             st.success(f"Solved: {res[2]} · objective {res[3]:.0f} · {len(res[4])} errors, {len(res[5])} warnings")
         except Exception as e:
             st.error(f"Solve failed: {e}")
@@ -251,10 +255,16 @@ with tab_report:
                 for w in warnings:
                     st.write("• " + w)
 
+        dl1, dl2 = st.columns(2)
         with open(st.session_state.out, "rb") as f:
-            st.download_button("⬇️  Download timetable (.xlsx)", f.read(),
-                               file_name="NRHS_Timetable_Final.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               width="stretch")
+            dl1.download_button("⬇️  Download Excel (.xlsx)", f.read(),
+                                file_name="NRHS_Timetable_Final.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                width="stretch")
+        if st.session_state.get("pdf"):
+            with open(st.session_state.pdf, "rb") as f:
+                dl2.download_button("⬇️  Download PDF (all classes + teachers)", f.read(),
+                                    file_name="NRHS_Timetable.pdf",
+                                    mime="application/pdf", width="stretch")
     else:
         st.info("Click **Generate timetable** to view the report.")
