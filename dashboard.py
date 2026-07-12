@@ -220,7 +220,7 @@ with tab_report:
         for (c, d, p), (s, t) in solution.items():
             load[t] += 1
         for c in m.study_hour_classes:
-            t = m.class_teacher.get(c)
+            t = m.study_supervisor.get(c)
             if t:
                 load[t] += 6
         ldf = (pd.DataFrame({"Teacher": list(load), "Load / 48": list(load.values())})
