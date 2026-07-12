@@ -1,66 +1,69 @@
 # NRHS Timetable — Feasibility & Bottleneck Report
 
 **Result:** solver status **OPTIMAL**, **0 hard-rule violations**. All hard rules
-(2, 3, 4-P8, 5, 6, 8, 9, 10, 11) are fully satisfied. The only soft rule that
-cannot be fully met is **Rule 7 (leisure after 2–3 periods)** — because of teacher
-overload in the source data. Details below.
+(2, 3, 4, 5, 6, 8, 9, 10, 11) are fully satisfied. The only soft rule not fully met
+is **Rule 7 (no continuous classes / leisure in between — Study Hour not counted)**,
+and only for structurally-overloaded teachers. Details below.
 
-## 1. Assumptions made (please confirm / adjust)
+## 1. Data corrections applied (please confirm)
 
-Four subjects have **no teacher** in the *Teacher Allotment* sheet. They were
-handled as follows:
+Two teacher names in the **G.K** column looked like data-entry variants and were
+auto-normalised to a single teacher (otherwise they would count as phantom extra
+teachers):
 
-| Subject | Periods/wk | Handling |
-|---------|-----------|----------|
-| **ORAL** | 18 (LKG/UKG) | taught by each class's **class teacher** |
-| **G.K** | 12 | taught by each class's **class teacher** |
-| **P.E.T** | 27 | **generic "P.E.T Instructor"**, parallel activity, P6/P7 only |
-| **Karate** | 9 | **generic "Karate Instructor"**, parallel, Thu P7 |
+| As typed | Normalised to | Where |
+|----------|--------------|-------|
+| `S.GAYATRI` | **S.GAYATHRI** | Class 2 G.K |
+| `SUMANI` | **D.SUMANI** | Class 3 G.K |
 
-> **Why P.E.T must be parallel:** a single P.E.T teacher would need 27 slots but only
-> 12 P6/P7 slots exist in a week. So P.E.T is modelled as a whole-school activity
-> (multiple coaches / grounds). If you have named P.E.T staff, add them to the
-> allotment and we can enforce real no-double-booking.
+Also note: **Class 3 G.K → D.SUMANI** (a senior-class English teacher) and
+**Classes 4–8 G.K → K.ESWAR** (science teacher). These are unusual cross-level
+assignments — confirm they are intended.
 
-## 2. Teacher weekly load (occupied slots out of 48) — after rebalancing
+## 2. Class Teacher vs Study-Hour supervisor (new two-row Period-1 sheet)
+
+They are now read separately. They differ for **Class 5**:
+
+| Class | Period-1 teacher | Study-Hour (P8) |
+|-------|------------------|-----------------|
+| Class 5 | S.GAYATHRI | **K.ESWAR** |
+
+All other classes 1–7 use the same teacher for both. Classes 8/9/10 have no study hour.
+
+## 3. Teacher weekly occupancy (of 48; Study-Hour supervision included)
 
 | Teacher | Load | Teacher | Load |
 |---------|------|---------|------|
-| SHEKINA | 45/48 | SURYA DEVI | 35/48 |
-| BIJILI | 45/48 | SAI KEERTHI | 32/48 |
-| MAHA LAKSHMI | 45/48 | M.LALITHA | 30/48 |
-| CHANDRAKALA | 42/48 | K.ESWAR | 29/48 |
-| S.GAYATHRI | 39/48 | D.SUMANI | 24/48 |
-| CHANDINI | 39/48 | VINAY | 21/48 |
-| N.NAVYA | 38/48 | SUNITHA | 18/48 |
-| P.SATYAVENI | 37/48 | RIYA | 15/48 |
-| R.KAMALA | 37/48 | D.GOWTHAM | 14/48 |
-| | | CHALAPATHI | 11/48 |
-| | | SAIRAM | 7/48 |
+| SHEKINA | 45 | SURYA DEVI | 35 |
+| BIJILI | 45 | K.ESWAR | 33 |
+| MAHA LAKSHMI | 45 | SAI KEERTHI | 31 |
+| CHANDRAKALA | 42 | M.LALITHA | 30 |
+| N.NAVYA | 40 | D.SUMANI | 25 |
+| S.GAYATHRI | 40 | VINAY | 21 |
+| R.KAMALA | 36 | SUNITHA | 18 |
+| CHANDINI | 36 | RIYA | 15 |
+| P.SATYAVENI | 35 | D.GOWTHAM | 14 |
+| | | ANURADHA | 12 · CHALAPATHI 11 · SAIRAM 7 |
 
-**Rebalancing applied by the school (this revision):**
-- Class-5 **EVS** moved S.GAYATHRI → **K.ESWAR**  (S.Gayathri 45→39, K.Eswar 23→29)
-- Class 3/4/5 **English** reduced 7→6, **P.E.T** raised 1→2  (N.Navya 41→38)
+## 4. Remaining soft note — Rule 7 (leisure)
 
-## 3. Remaining soft note — Rule 7 (leisure)
+Longest unbroken teaching stretch (Study Hour excluded), teachers with 4+:
 
-Only the **LKG/UKG homeroom teachers** (SHEKINA, BIJILI, MAHA LAKSHMI — 45/48) still
-have long unbroken stretches. This is *by design*: pre-primary homeroom teachers stay
-with their class almost the whole day, so this is normal and usually acceptable.
+- **SHEKINA, BIJILI, MAHA LAKSHMI — 7** (LKG/UKG homeroom teachers, with their class
+  all day by design; acceptable).
+- **S.GAYATHRI — 7 (genuine overload).** She teaches EVS to Classes 2–5, Maths to
+  Class 3, Biology to Classes 6–7, plus G.K — ~40/48. Some days are fully packed.
+- **CHANDRAKALA — 6.**
 
-S.GAYATHRI (39) and N.NAVYA (38) now have at most a single 4-period run on a few days
-— unavoidable at that load, but no longer a full-day block.
+### To smooth further (optional data change)
+Move some of **S.GAYATHRI**'s load to a lighter teacher: e.g. shift **Class 3 Maths**
+(7/wk) or one EVS class to SAIRAM (7/48), CHALAPATHI (11/48), or ANURADHA (12/48).
 
-### If you want to smooth further (optional)
-1. **Add a KG assistant** so the LKG/UKG homeroom teachers are not solo all day.
-2. **Provide named P.E.T staff** if P.E.T should be a real (non-parallel) subject.
-3. Shift 1–2 more periods off CHANDRAKALA (42) to a lighter teacher.
-
-## 4. What is guaranteed correct
-
-- No teacher is ever in two classes at once (parallel P.E.T / Karate excluded by design).
-- Every subject hits its exact weekly period count for every class.
-- Classes LKG–7 are fully packed P1–P7 with Study Hour (P8) supervised by the class teacher.
-- Classes 8/9/10 have no Study Hour and exactly 6 free slots each.
-- Karate = Thursday P7 (Classes 1–8); P.E.T only in P6/P7; Gowtham never in P5;
-  Chalapathi only P1–P3; Riya/Sunitha/Gowtham only in the afternoon.
+## 5. Guaranteed correct
+- No teacher double-booked (parallel P.E.T / Karate excluded by design).
+- Every (class, subject) hits its exact weekly count; every class totals 42.
+- Classes 1–7 fully packed P1–P7 + Study Hour by the listed supervisor.
+- Classes 8/9/10: no Study Hour, 6 free slots each.
+- Karate = Thursday P7 (Classes 1–8); P.E.T only P6/P7; Gowtham never in P5;
+  Chalapathi only P1–P3; Riya/Sunitha/Gowtham only in the afternoon; K.Eswar
+  supervises Class-5 Study Hour and is never double-booked at P8.

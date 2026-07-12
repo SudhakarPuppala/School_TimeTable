@@ -31,7 +31,7 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
     by_cs = defaultdict(list)                  # (c,s)   -> [vars]
     by_teacher_slot = defaultdict(list)        # (teacher,d,p) -> [vars]
 
-    supervisors = {m.class_teacher[c] for c in m.study_hour_classes if c in m.class_teacher}
+    supervisors = {m.study_supervisor[c] for c in m.study_hour_classes if c in m.study_supervisor}
 
     for c in m.classes:
         for s in m.subjects_of[c]:
@@ -84,24 +84,19 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
     # =====================  SOFT OBJECTIVE  =====================
     penalties = []
 
-    # busy[t,d,p] : teacher occupied (teaching, or supervising study hour)
+    # busy[t,d,p] : teacher actively TEACHING (study-hour supervision is NOT
+    # counted -- Rule 7 "Study Hour is not counted").
     busy = {}
     real_teachers = [t for t in m.teachers if t not in GENERIC_TEACHER.values()]
     for t in real_teachers:
-        supervises = [c for c in m.study_hour_classes if m.class_teacher.get(c) == t]
         for d in range(N_DAYS):
             for p in range(1, 9):
                 vs = by_teacher_slot.get((t, d, p), [])
                 b = model.NewBoolVar(f"busy_{t}_{d}_{p}")
-                if p == STUDY_PERIOD and supervises:
-                    model.Add(b == 1)          # study-hour duty
-                elif vs:
-                    model.Add(b == sum(vs))
-                else:
-                    model.Add(b == 0)
+                model.Add(b == sum(vs)) if vs else model.Add(b == 0)
                 busy[(t, d, p)] = b
 
-    # (S1) leisure: penalise 4 consecutive busy periods (Rule 7)
+    # (S1) leisure: penalise 4 consecutive taught periods (Rule 7)
     for t in real_teachers:
         for d in range(N_DAYS):
             for start in range(1, 6):          # windows 1-4 .. 5-8
@@ -112,7 +107,7 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
 
     # (S2) class teacher should take Period 1 (Rule 4) -> reward (negative penalty)
     for c in m.study_hour_classes:
-        ct = m.class_teacher.get(c)
+        ct = m.p1_teacher.get(c)
         if not ct:
             continue
         p1vars = [x[(c, s, d, 1)] for s in m.subjects_of[c]

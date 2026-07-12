@@ -46,8 +46,9 @@ def read_sheets(path):
     allot = pd.read_excel(path, sheet_name="Teacher Allotment", header=0)
     p1raw = pd.read_excel(path, sheet_name="Period 1 teacher allotment", header=0)
     classes = list(p1raw.columns[1:])
-    teachers = list(p1raw.iloc[0, 1:])
-    p1 = pd.DataFrame({"Class": classes, "Period 1 Teacher": teachers})
+    p1row = list(p1raw.iloc[0, 1:])
+    shrow = list(p1raw.iloc[1, 1:]) if len(p1raw) > 1 else [""] * len(classes)
+    p1 = pd.DataFrame({"Class": classes, "Period 1 Teacher": p1row, "Study Hour": shrow})
     return plan.reset_index(drop=True), allot.reset_index(drop=True), p1
 
 
@@ -71,7 +72,9 @@ def write_sheets(plan, allot, p1, path):
 
     ws = wb.create_sheet("Period 1 teacher allotment")
     ws.append(["Class"] + p1["Class"].tolist())
-    ws.append(["Period 1 Teacher"] + p1["Period 1 Teacher"].tolist())
+    ws.append(["Period 1 Teacher"] + ["" if pd.isna(v) else v for v in p1["Period 1 Teacher"].tolist()])
+    if "Study Hour" in p1.columns:
+        ws.append(["Study Hour"] + ["" if pd.isna(v) else v for v in p1["Study Hour"].tolist()])
 
     wb.save(path)
     return path
@@ -93,7 +96,7 @@ def class_grid(m, solution, cls):
                 s, t = solution[(cls, d, p)]
                 g[p - 1][d] = f"{SUBJ_ABBR.get(s, s)}||{t}"
             elif p == 8 and cls in m.study_hour_classes:
-                g[p - 1][d] = f"STUDY||{m.class_teacher.get(cls, '')}"
+                g[p - 1][d] = f"STUDY||{m.study_supervisor.get(cls, '')}"
     return g
 
 
@@ -103,7 +106,7 @@ def teacher_grid(m, solution, teacher):
         if t == teacher:
             g[p - 1][d] = f"{SUBJ_ABBR.get(s, s)}||{CLASS_DISPLAY.get(c, c)}"
     for c in m.study_hour_classes:
-        if m.class_teacher.get(c) == teacher:
+        if m.study_supervisor.get(c) == teacher:
             for d in range(6):
                 g[7][d] = f"STUDY||{CLASS_DISPLAY.get(c, c)}"
     return g

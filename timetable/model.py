@@ -71,6 +71,18 @@ KARATE_PERIOD = 7
 KARATE_CLASSES = {"Class 1(A)", "CLASS 1(B)", "Class 2", "Class 3", "Class 4",
                   "Class 5", "Class 6", "Class 7", "Class 8"}
 
+# ---- teacher-name aliases: fix data-entry variants -> one canonical name ----
+_TEACHER_ALIASES = {
+    "S.GAYATRI": "S.GAYATHRI",   # typo of S.GAYATHRI (Class 2 G.K)
+    "SUMANI": "D.SUMANI",        # short form of D.SUMANI (Class 3 G.K)
+}
+
+
+def _canon_teacher(name):
+    n = re.sub(r"\s+", " ", str(name).strip())
+    return _TEACHER_ALIASES.get(n.upper(), n)
+
+
 # ---- name normalisation: "Period 1 teacher allotment" -> allotment names ----
 _P1_NAME_MAP = {
     "shekina": "SHEKINA", "bijili": "BIJILI", "maha lakshmi": "MAHA LAKSHMI",
@@ -110,7 +122,8 @@ class Model:
     subjects: list                        # subject names
     plan: dict                            # (class, subject) -> periods/week
     teacher_of: dict                      # (class, subject) -> teacher (incl. generic)
-    class_teacher: dict                   # class -> class teacher (P1 / study-hour)
+    p1_teacher: dict                      # class -> Period-1 teacher
+    study_supervisor: dict                # class -> Study-Hour (P8) supervisor
     teachers: list                        # all real (non-generic) teachers
     study_hour_classes: list              # classes with a study hour
     # convenience
@@ -161,16 +174,28 @@ def load_model(path: str) -> Model:
             subj = _ALLOT_SUBJ.get(sc, sc)
             t = r[k]
             if t not in (None, ""):
-                teacher_of[(cl, subj)] = str(t).strip()
+                teacher_of[(cl, subj)] = _canon_teacher(t)
 
-    # ---- Period 1 teacher allotment (class teacher) ----
-    p1 = list(wb["Period 1 teacher allotment"].iter_rows(values_only=True))
-    class_teacher = {}
-    for key, name in zip(p1[0][1:], p1[1][1:]):
-        cl = _P1_CLASS_MAP.get(key)
-        if cl is None or name in (None, ""):
+    # ---- Period 1 teacher allotment: "Period 1 Teacher" + "Study Hour" rows ----
+    p1rows = list(wb["Period 1 teacher allotment"].iter_rows(values_only=True))
+    hdr_p1 = p1rows[0][1:]
+    p1_teacher, study_supervisor = {}, {}
+    for row in p1rows[1:]:
+        label = str(row[0]).strip().lower() if row[0] else ""
+        if label.startswith("period 1"):
+            target = p1_teacher
+        elif label.startswith("study"):
+            target = study_supervisor
+        else:
             continue
-        class_teacher[cl] = _P1_NAME_MAP.get(_norm(name), str(name).strip())
+        for key, name in zip(hdr_p1, row[1:]):
+            cl = _P1_CLASS_MAP.get(key)
+            if cl is None or name in (None, ""):
+                continue
+            target[cl] = _canon_teacher(_P1_NAME_MAP.get(_norm(name), str(name).strip()))
+    # study-hour supervisor falls back to the Period-1 teacher when not listed
+    for cl in p1_teacher:
+        study_supervisor.setdefault(cl, p1_teacher[cl])
 
     # ---- fill in rule-based teachers for subjects lacking allotment ----
     for cl in classes:
@@ -182,7 +207,7 @@ def load_model(path: str) -> Model:
             if subj in GENERIC_TEACHER:
                 teacher_of[(cl, subj)] = GENERIC_TEACHER[subj]
             elif subj in CLASS_TEACHER_SUBJECTS:
-                teacher_of[(cl, subj)] = class_teacher.get(cl, f"{cl} teacher")
+                teacher_of[(cl, subj)] = p1_teacher.get(cl, f"{cl} teacher")
 
     teachers = sorted({t for t in teacher_of.values() if t not in GENERIC_TEACHER.values()})
     study_hour_classes = [c for c in classes if c not in NO_STUDY_HOUR]
@@ -190,5 +215,5 @@ def load_model(path: str) -> Model:
     subjects_of = {c: [s for s in subjects if plan.get((c, s), 0) > 0] for c in classes}
 
     return Model(classes=classes, subjects=subjects, plan=plan, teacher_of=teacher_of,
-                 class_teacher=class_teacher, teachers=teachers,
+                 p1_teacher=p1_teacher, study_supervisor=study_supervisor, teachers=teachers,
                  study_hour_classes=study_hour_classes, subjects_of=subjects_of)

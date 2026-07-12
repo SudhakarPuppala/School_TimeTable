@@ -68,7 +68,7 @@ def write_class_sheet(wb, m: Model, solution: dict):
             for j, c in enumerate(m.classes, start=3):
                 fill, font = None, CELL_FONT
                 if is_study and c in m.study_hour_classes:
-                    ct = m.class_teacher.get(c, "")
+                    ct = m.study_supervisor.get(c, "")
                     text, fill = f"{ct}\n(CLASS)", STUDYFILL
                 elif (c, d, p) in solution:
                     s, t = solution[(c, d, p)]
@@ -111,7 +111,7 @@ def write_teacher_sheet(wb, m: Model, solution: dict):
         tgrid[t][d][p] = f"{CLASS_DISPLAY.get(c, c)} ({_abbr(s)})"
     # study-hour supervision
     for c in m.study_hour_classes:
-        t = m.class_teacher.get(c)
+        t = m.study_supervisor.get(c)
         if t:
             for d in range(N_DAYS):
                 tgrid[t][d][STUDY_PERIOD] = CLASS_DISPLAY.get(c, c)

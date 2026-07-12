@@ -64,22 +64,19 @@ def verify(m: Model, solution: dict):
             errors.append(f"GOWTHAM in P5 for {c} {DAYS[d]} (should be leisure)")
 
     # 8. study-hour supervisor not teaching at P8 elsewhere
-    supervisors = {m.class_teacher[c] for c in m.study_hour_classes if c in m.class_teacher}
+    supervisors = {m.study_supervisor[c] for c in m.study_hour_classes if c in m.study_supervisor}
     for (c, d, p), (s, t) in solution.items():
+        if p == STUDY_PERIOD and t in supervisors and t == m.study_supervisor.get(c):
+            continue
         if p == STUDY_PERIOD and t in supervisors:
             errors.append(f"SUPERVISOR CLASH: {t} teaching {c} at P8 but supervises a study hour")
 
-    # ---- soft: leisure after 2-3 periods (warn only) ----
-    teach = defaultdict(lambda: defaultdict(set))   # t -> d -> set(periods busy)
+    # ---- soft: leisure after 2-3 periods (study hour NOT counted -- Rule 7) ----
+    teach = defaultdict(lambda: defaultdict(set))   # t -> d -> set(taught periods)
     for (c, d, p), (s, t) in solution.items():
         if s in PARALLEL_SUBJECTS or t in GENERIC_TEACHER.values():
             continue
         teach[t][d].add(p)
-    for c in m.study_hour_classes:
-        t = m.class_teacher.get(c)
-        if t:
-            for d in range(N_DAYS):
-                teach[t][d].add(STUDY_PERIOD)
     for t, days in teach.items():
         for d, ps in days.items():
             run = best = 0
