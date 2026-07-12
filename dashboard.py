@@ -193,23 +193,32 @@ if generate and "edited" in st.session_state:
 
 res = st.session_state.get("result")
 
+def _section(title, body_html):
+    st.markdown(
+        f"<div style='background:#2A4D69;color:#fff;font-weight:600;font-size:16px;"
+        f"padding:8px 14px;border-radius:8px;margin:18px 0 8px'>{title}</div>",
+        unsafe_allow_html=True)
+    st.markdown(body_html, unsafe_allow_html=True)
+
 with tab_class:
     if res:
         m, solution = res[0], res[1]
-        cls = st.selectbox("Class", [CLASS_DISPLAY.get(c, c) for c in m.classes])
-        key = next(c for c in m.classes if CLASS_DISPLAY.get(c, c) == cls)
-        st.markdown(grid_html(class_grid(m, solution, key)), unsafe_allow_html=True)
+        st.caption(f"All {len(m.classes)} class timetables")
+        for c in m.classes:
+            _section(f"📚  {CLASS_DISPLAY.get(c, c)}",
+                     grid_html(class_grid(m, solution, c)))
     else:
         st.info("Click **Generate timetable** to view results.")
 
 with tab_teacher:
     if res:
         m, solution = res[0], res[1]
-        teachers = m.teachers + [g for g in GENERIC_TEACHER.values()
-                                 if any(t == g for _, t in solution.values())]
-        who = st.selectbox("Teacher", sorted(teachers))
-        st.markdown(grid_html(teacher_grid(m, solution, who), sub_label=True),
-                    unsafe_allow_html=True)
+        teachers = sorted(m.teachers) + sorted(
+            g for g in GENERIC_TEACHER.values() if any(t == g for _, t in solution.values()))
+        st.caption(f"All {len(teachers)} teacher timetables")
+        for who in teachers:
+            _section(f"👩‍🏫  {who}",
+                     grid_html(teacher_grid(m, solution, who), sub_label=True))
     else:
         st.info("Click **Generate timetable** to view results.")
 
