@@ -135,6 +135,8 @@ def load_model(path: str) -> Model:
         subj = r[0]
         if not subj:
             continue
+        if "total" in str(subj).strip().lower():   # skip summary rows e.g. "Total Periods"
+            continue
         subjects.append(subj)
         for j, cl in enumerate(hdr[1:], start=1):
             if cl is None:

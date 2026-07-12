@@ -22,44 +22,39 @@ handled as follows:
 > (multiple coaches / grounds). If you have named P.E.T staff, add them to the
 > allotment and we can enforce real no-double-booking.
 
-## 2. Teacher weekly load (occupied slots out of 48)
+## 2. Teacher weekly load (occupied slots out of 48) — after rebalancing
 
 | Teacher | Load | Teacher | Load |
 |---------|------|---------|------|
 | SHEKINA | 45/48 | SURYA DEVI | 35/48 |
 | BIJILI | 45/48 | SAI KEERTHI | 32/48 |
 | MAHA LAKSHMI | 45/48 | M.LALITHA | 30/48 |
-| **S.GAYATHRI** | **45/48** | D.SUMANI | 24/48 |
-| CHANDRAKALA | 42/48 | K.ESWAR | 23/48 |
-| N.NAVYA | 41/48 | VINAY | 21/48 |
-| CHANDINI | 39/48 | SUNITHA | 18/48 |
+| CHANDRAKALA | 42/48 | K.ESWAR | 29/48 |
+| S.GAYATHRI | 39/48 | D.SUMANI | 24/48 |
+| CHANDINI | 39/48 | VINAY | 21/48 |
+| N.NAVYA | 38/48 | SUNITHA | 18/48 |
 | P.SATYAVENI | 37/48 | RIYA | 15/48 |
 | R.KAMALA | 37/48 | D.GOWTHAM | 14/48 |
 | | | CHALAPATHI | 11/48 |
 | | | SAIRAM | 7/48 |
 
-## 3. The one real bottleneck — Rule 7 (leisure)
+**Rebalancing applied by the school (this revision):**
+- Class-5 **EVS** moved S.GAYATHRI → **K.ESWAR**  (S.Gayathri 45→39, K.Eswar 23→29)
+- Class 3/4/5 **English** reduced 7→6, **P.E.T** raised 1→2  (N.Navya 41→38)
 
-Some teachers are so heavily loaded in the source data that they **cannot** get a
-free period after every 2–3 periods:
+## 3. Remaining soft note — Rule 7 (leisure)
 
-- **SHEKINA, BIJILI, MAHA LAKSHMI (LKG/UKG homeroom teachers)** — 45/48.
-  These are pre-primary homeroom teachers who stay with their class almost the whole
-  day *by design*. Long unbroken stretches here are normal and usually acceptable.
-- **S.GAYATHRI — 45/48 (genuine concern).** She is the Class-5 teacher **and** the
-  EVS teacher for ~8 classes **and** teaches some Biology + G.K. With only 3 free
-  slots all week she has full 7–8 period days.
-- **CHANDRAKALA (42), N.NAVYA (41)** — also very tight.
+Only the **LKG/UKG homeroom teachers** (SHEKINA, BIJILI, MAHA LAKSHMI — 45/48) still
+have long unbroken stretches. This is *by design*: pre-primary homeroom teachers stay
+with their class almost the whole day, so this is normal and usually acceptable.
 
-### Suggested data-side fixes (pick any)
-1. **Redistribute EVS**: move EVS for 2–3 of the lower classes from **S.GAYATHRI**
-   to a lighter teacher (e.g. SAIRAM 7/48, CHALAPATHI 11/48, ANURADHA 12/48).
-2. **Add a KG assistant** so SHEKINA / BIJILI / MAHA LAKSHMI are not solo all day.
-3. **Provide named P.E.T staff** if P.E.T should be a real (non-parallel) subject.
-4. Reduce any subject's weekly count for the most-loaded classes.
+S.GAYATHRI (39) and N.NAVYA (38) now have at most a single 4-period run on a few days
+— unavoidable at that load, but no longer a full-day block.
 
-Give us the adjusted *Teacher Allotment* / *Weekly Period Plan* and re-run — the
-leisure warnings will shrink automatically.
+### If you want to smooth further (optional)
+1. **Add a KG assistant** so the LKG/UKG homeroom teachers are not solo all day.
+2. **Provide named P.E.T staff** if P.E.T should be a real (non-parallel) subject.
+3. Shift 1–2 more periods off CHANDRAKALA (42) to a lighter teacher.
 
 ## 4. What is guaranteed correct
 
