@@ -113,7 +113,7 @@ def class_grid(m, solution, cls):
             if (cls, d, p) in solution:
                 s, t = solution[(cls, d, p)]
                 g[p - 1][d] = f"{cfg.subj_abbr.get(s, s)}||{t}"
-            elif p == 8 and cls in m.study_hour_classes:
+            elif p == 8 and cls in m.study_hour_classes and m.has_p8(DAYS[d]):
                 g[p - 1][d] = f"STUDY||{m.study_supervisor.get(cls, '')}"
     return g
 
@@ -127,7 +127,8 @@ def teacher_grid(m, solution, teacher):
     for c in m.study_hour_classes:
         if m.study_supervisor.get(c) == teacher:
             for d in range(6):
-                g[7][d] = f"STUDY||{cfg.class_display.get(c, c)}"
+                if m.has_p8(DAYS[d]):
+                    g[7][d] = f"STUDY||{cfg.class_display.get(c, c)}"
     return g
 
 

@@ -13,11 +13,18 @@ person**; if they are different people, ignore the clash.
 
 | Teacher (NRHS = NRCS) | NRHS periods | NRCS periods | Clash |
 |-----------------------|--------------|--------------|-------|
-| CHALAPATHI = Chalapathi | 1–3 | 4–7 | ✅ none |
-| D.GOWTHAM = Gowtham | 6–8 | 2–5 | ✅ none |
+| CHALAPATHI = Chalapathi | 1–3 | **5–7** | ✅ none (disjoint windows) |
+| D.GOWTHAM = Gowtham | 6–8 | 2–4 | ✅ none |
 | RIYA = Riya | 5–8 | 1–4 | ✅ none |
-| SUNITHA = Sunitha | 5,6,8 | 1–4 | ✅ none |
+| SUNITHA = Sunitha | 5–8 | 1–4 | ✅ none |
 | ~~M.LALITHA / Lalitha~~ | — | — | not shared (different people) |
+
+All four shared teachers have **disjoint** windows across the two schools, so none is ever
+double-booked:
+- **Chalapathi** (same person, confirmed): NRHS **P1–P3**, NRCS **P5–P7**.
+- **Gowtham / Riya / Sunitha**: afternoon at NRHS, morning at NRCS.
+
+`M.LALITHA` (NRHS) and `Lalitha` (NRCS) are different people (`CONFIRMED_DISTINCT`).
 
 ## Interpretation
 

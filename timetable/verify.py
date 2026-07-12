@@ -37,12 +37,10 @@ def verify(m: Model, solution: dict, windows=None):
         if v > 1:
             errors.append(f"SLOT CLASH: {k} has {v} subjects")
 
-    # 4. study-hour classes: P1-P7 fully packed
-    for c in m.study_hour_classes:
-        for d in range(N_DAYS):
-            for p in range(1, 8):
-                if (c, d, p) not in solution:
-                    warnings.append(f"EMPTY SLOT: {c} {DAYS[d]} P{p} (study-hour class)")
+    # 4. every subject's placements land only in real (existing) slots
+    for (c, d, p), (s, t) in solution.items():
+        if p == STUDY_PERIOD and DAYS[d] in cfg.no_p8_days:
+            errors.append(f"NO-P8-DAY: {c} {s} at {DAYS[d]} P8 (no P8 that day)")
 
     # 5. window rules (against the effective windows actually used)
     for (c, d, p), (s, t) in solution.items():

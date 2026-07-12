@@ -46,12 +46,23 @@ def occupancy(m, solution):
 
 
 def main():
-    data = {}
+    data, errors = {}, {}
     for school, path in SCHOOLS.items():
-        m = load_model(path, school)
-        sol = solve(m, 90)[0]
-        occ, disp = occupancy(m, sol)
-        data[school] = (occ, disp)
+        try:
+            m = load_model(path, school)
+            sol = solve(m, 90)[0]
+            data[school] = occupancy(m, sol)
+        except Exception as e:
+            errors[school] = str(e)
+
+    if errors:
+        print("=" * 64)
+        for s, e in errors.items():
+            print(f"⚠ Could not solve {s}: {e}")
+        print("Cross-school check needs both schools to solve. Fix the above first.")
+        print("=" * 64)
+        if len(data) < 2:
+            return 1
 
     occ_h, disp_h = data["NRHS"]
     occ_c, disp_c = data["NRCS"]

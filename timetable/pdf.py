@@ -40,7 +40,7 @@ def _class_grid(m, solution, c):
             if (c, d, p) in solution:
                 s, t = solution[(c, d, p)]
                 g[p - 1][d] = (cfg.subj_abbr.get(s, s), t.replace(" Instructor", ""))
-            elif p == 8 and c in m.study_hour_classes:
+            elif p == 8 and c in m.study_hour_classes and m.has_p8(DAYS[d]):
                 g[p - 1][d] = ("STUDY", m.study_supervisor.get(c, ""))
     return g
 
@@ -54,7 +54,8 @@ def _teacher_grid(m, solution, teacher):
     for c in m.study_hour_classes:
         if m.study_supervisor.get(c) == teacher:
             for d in range(6):
-                g[7][d] = ("STUDY", cfg.class_display.get(c, c))
+                if m.has_p8(DAYS[d]):
+                    g[7][d] = ("STUDY", cfg.class_display.get(c, c))
     return g
 
 

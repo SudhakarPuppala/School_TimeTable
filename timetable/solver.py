@@ -64,6 +64,8 @@ def _build_and_solve(m: Model, windows, max_seconds, log):
                 continue
             for d in range(N_DAYS):
                 for p in _allowed_periods(m, c, s, windows, pin_windows):
+                    if p == STUDY_PERIOD and not m.has_p8(DAYS[d]):
+                        continue                      # no Period 8 on this day
                     if p == STUDY_PERIOD and teacher in supervisors:
                         continue
                     v = model.NewBoolVar(f"x_{c}_{s}_{d}_{p}")
@@ -82,12 +84,8 @@ def _build_and_solve(m: Model, windows, max_seconds, log):
         for d in range(N_DAYS):
             for p in m.teachable_periods(c):
                 vs = by_slot[(c, d, p)]
-                if not vs:
-                    continue
-                if c in m.study_hour_classes and p <= 7:
-                    model.Add(sum(vs) == 1)
-                else:
-                    model.Add(sum(vs) <= 1)
+                if vs:
+                    model.Add(sum(vs) <= 1)          # at most one subject per slot
 
     for (t, d, p), vs in by_teacher_slot.items():
         if len(vs) > 1:

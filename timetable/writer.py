@@ -57,7 +57,9 @@ def write_class_sheet(wb, m: Model, solution):
             _cell(ws, row, 2, label, PERFILL, Font(bold=True, size=10))
             for j, c in enumerate(m.classes, start=3):
                 fill, font = None, CELL_FONT
-                if is_study and c in m.study_hour_classes:
+                if is_study and not m.has_p8(DAYS[d]):
+                    text, fill = "", FREEFILL              # no Period 8 this day
+                elif is_study and c in m.study_hour_classes:
                     ct = m.study_supervisor.get(c, "")
                     text, fill = f"{ct}\n(CLASS)", STUDYFILL
                 elif (c, d, p) in solution:
@@ -101,7 +103,8 @@ def write_teacher_sheet(wb, m: Model, solution):
         t = m.study_supervisor.get(c)
         if t:
             for d in range(N_DAYS):
-                tgrid[t][d][STUDY_PERIOD] = cfg.class_display.get(c, c)
+                if m.has_p8(DAYS[d]):
+                    tgrid[t][d][STUDY_PERIOD] = cfg.class_display.get(c, c)
 
     generic = [g for g in cfg.generic_teacher.values()
                if any(tt == g for _, tt in solution.values())]

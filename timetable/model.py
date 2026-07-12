@@ -46,6 +46,7 @@ class SchoolConfig:
     sheet_class_name: str
     sheet_teacher_name: str
     teacher_title: str
+    no_p8_days: set = field(default_factory=set)   # days with no Period 8 (e.g. {"SAT"})
 
     def canon_teacher(self, name):
         n = re.sub(r"\s+", " ", str(name).strip())
@@ -70,6 +71,12 @@ class Model:
 
     def teachable_periods(self, cls):
         return [1, 2, 3, 4, 5, 6, 7, 8] if cls in self.cfg.no_study_hour else [1, 2, 3, 4, 5, 6, 7]
+
+    def has_p8(self, day_name):
+        return day_name not in self.cfg.no_p8_days
+
+    def has_study_hour(self, cls, day_name):
+        return cls in self.study_hour_classes and self.has_p8(day_name)
 
 
 # =====================================================================
@@ -105,6 +112,7 @@ NRHS = SchoolConfig(
     morning_only=set(),
     sheet_class_name="Class Time table", sheet_teacher_name="Teacher Time Table",
     teacher_title="SCHOOL TEACHER TIMETABLE",
+    no_p8_days={"SAT"},
 )
 
 # =====================================================================
@@ -126,12 +134,13 @@ NRCS = SchoolConfig(
     generic_teacher={"P.E.T": "P.E", "Karate": "Martial Arts"},
     class_teacher_subjects={"Oral"},
     teacher_windows={"Sonu": {5, 6, 7, 8}, "Gowtham": {2, 3, 4},
-                     "Sunitha": {1, 2, 3, 4}, "Riya": {1, 2, 3, 4}, "Bheema": {1, 2, 3, 4}},
+                     "Sunitha": {1, 2, 3, 4}, "Riya": {1, 2, 3, 4}, "Bheema": {1, 2, 3, 4},
+                     "Chalapathi": {5, 6, 7}},   # avoid overlap w/ NRHS Chalapathi (P1-3)
     default_window={1, 2, 3, 4, 5, 6, 7},
     subject_windows={"P.E.T": {5, 6, 7}},
     karate_day="THU", karate_period=6,
     karate_classes={"Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
-                    "Class 6", "Class 7", "Class 8"},
+                    "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"},
     pinned_period={("L.K.G", "Oral"): 1},
     subject_inherit={"Chemisty": "Physics", "Eng Gram": "English"},
     teacher_aliases={},
