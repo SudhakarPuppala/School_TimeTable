@@ -12,7 +12,8 @@ from collections import defaultdict
 import openpyxl
 from timetable.model import (load_model, DAYS, SUBJ_ABBR, CLASS_DISPLAY,
                              PARALLEL_SUBJECTS, GENERIC_TEACHER, TEACHER_WINDOWS,
-                             SUBJECT_WINDOWS, KARATE_DAY, KARATE_PERIOD, KARATE_CLASSES)
+                             SUBJECT_WINDOWS, KARATE_DAY, KARATE_PERIOD, KARATE_CLASSES,
+                             PINNED_PERIOD)
 
 ABBR2SUBJ = {v: k for k, v in SUBJ_ABBR.items()}
 DISP2CANON = {v: k for k, v in CLASS_DISPLAY.items()}
@@ -144,6 +145,16 @@ def main():
     for c in KARATE_CLASSES:
         if m.plan.get((c, "Karate"), 0) and (c, DAYS.index(KARATE_DAY), KARATE_PERIOD) not in sol:
             fail.append(f"[KARATE-MISSING] {c} Thu P7")
+
+    # 7b -- pinned subjects (Rules 12/13) stay within {pref, pref-1}, mostly at pref
+    for (c, s), pp in PINNED_PERIOD.items():
+        if m.plan.get((c, s), 0) == 0:
+            continue
+        slots = [p for (cc, d, p), (t, ss) in sol.items() if cc == c and ss == s]
+        bad = [p for p in slots if p not in (pp, pp - 1)]
+        if bad:
+            fail.append(f"[PIN] {c} {s} placed at P{bad} (allowed P{pp}/P{pp-1})")
+        print(f"  · pin {c} {s}: {slots.count(pp)}@P{pp}, {slots.count(pp-1)}@P{pp-1}")
 
     # 8 -- Class sheet and Teacher sheet AGREE with each other (exact class+subject)
     for (c, d, p), (t, s) in sol.items():

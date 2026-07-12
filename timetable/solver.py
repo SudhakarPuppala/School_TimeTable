@@ -10,10 +10,10 @@ from ortools.sat.python import cp_model
 
 from .model import (Model, DAYS, N_DAYS, STUDY_PERIOD, SUBJECT_WINDOWS,
                     PARALLEL_SUBJECTS, GENERIC_TEACHER, KARATE_DAY, KARATE_PERIOD,
-                    KARATE_CLASSES)
+                    KARATE_CLASSES, PINNED_PERIOD)
 
 
-def _allowed_periods(m: Model, cls, subj):
+def _allowed_periods(m: Model, cls, subj, pin_windows):
     """Periods where (cls, subj) may be placed, honouring all window rules."""
     teacher = m.teacher_of[(cls, subj)]
     periods = set(m.teachable_periods(cls))
@@ -21,7 +21,31 @@ def _allowed_periods(m: Model, cls, subj):
         periods &= m.teacher_window(teacher)
     if subj in SUBJECT_WINDOWS:                # e.g. P.E.T only P6/P7
         periods &= SUBJECT_WINDOWS[subj]
+    if (cls, subj) in pin_windows:             # Rules 12/13 period pins
+        periods &= pin_windows[(cls, subj)]
     return periods
+
+
+def _compute_pins(m: Model):
+    """Effective (auto-relaxed) period windows for pinned subjects + notes."""
+    pin_windows, pin_pref, notes = {}, {}, []
+    for (c, s), pp in PINNED_PERIOD.items():
+        if c not in m.classes or m.plan.get((c, s), 0) == 0:
+            continue
+        n = m.plan[(c, s)]
+        karate = 1 if (c in KARATE_CLASSES and pp == KARATE_PERIOD
+                       and m.plan.get((c, "Karate"), 0)) else 0
+        avail = N_DAYS - karate
+        pin_pref[(c, s)] = pp
+        if n <= avail:
+            pin_windows[(c, s)] = {pp}
+        else:
+            pin_windows[(c, s)] = {pp, pp - 1}
+            notes.append(
+                f"{c} {s}: {n}/week requested in P{pp}, but only {avail} P{pp} slots "
+                f"are usable (Thursday P{pp} is Karate). {avail} placed in P{pp}, "
+                f"{n - avail} in P{pp - 1}.")
+    return pin_windows, pin_pref, notes
 
 
 def solve(m: Model, max_seconds: int = 120, log: bool = False):
@@ -32,6 +56,19 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
     by_teacher_slot = defaultdict(list)        # (teacher,d,p) -> [vars]
 
     supervisors = {m.study_supervisor[c] for c in m.study_hour_classes if c in m.study_supervisor}
+
+    # ---- validate: every subject with periods must have a teacher ----
+    missing = [(c, s, m.plan[(c, s)]) for c in m.classes for s in m.subjects_of[c]
+               if (c, s) not in m.teacher_of]
+    if missing:
+        lines = "; ".join(f"{c} · {s} ({n} period{'s' if n != 1 else ''}/week)"
+                          for c, s, n in missing)
+        raise ValueError(
+            "No teacher assigned for: " + lines +
+            ". Fix in 'Teacher Allotment' (add a teacher) or set the periods to 0 "
+            "in 'Weekly Period Plan'.")
+
+    pin_windows, pin_pref, pin_notes = _compute_pins(m)
 
     for c in m.classes:
         for s in m.subjects_of[c]:
@@ -46,7 +83,7 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
                 by_cs[(c, s)].append(v)
                 continue
             for d in range(N_DAYS):
-                for p in _allowed_periods(m, c, s):
+                for p in _allowed_periods(m, c, s, pin_windows):
                     # study-hour supervisors are busy at P8 -> can't teach there
                     if p == STUDY_PERIOD and teacher in supervisors:
                         continue
@@ -116,6 +153,12 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
         for v in p1vars:
             penalties.append((-15, v))         # reward class teacher in P1
 
+    # (S2b) pinned subjects (Rules 12/13) -> strongly reward the preferred period
+    for (c, s), pp in pin_pref.items():
+        for d in range(N_DAYS):
+            if (c, s, d, pp) in x:
+                penalties.append((-40, x[(c, s, d, pp)]))
+
     # (S3) avoid same subject twice in one day
     for c in m.classes:
         for s in m.subjects_of[c]:
@@ -143,4 +186,4 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False):
         if solver.Value(v) == 1:
             solution[(c, d, p)] = (s, m.teacher_of[(c, s)])
 
-    return solution, solver.StatusName(status), solver.ObjectiveValue()
+    return solution, solver.StatusName(status), solver.ObjectiveValue(), pin_notes

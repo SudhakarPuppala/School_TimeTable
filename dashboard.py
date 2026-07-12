@@ -83,9 +83,9 @@ def write_sheets(plan, allot, p1, path):
 # ------------------------------------------------------------------ solve
 def run_solver(input_path, seconds):
     m = load_model(input_path)
-    solution, status, obj = solve(m, max_seconds=seconds)
+    solution, status, obj, pin_notes = solve(m, max_seconds=seconds)
     errors, warnings = verify(m, solution)
-    return m, solution, status, obj, errors, warnings
+    return m, solution, status, obj, errors, warnings + pin_notes
 
 
 def class_grid(m, solution, cls):

@@ -28,8 +28,10 @@ def main():
     print(f"  classes={len(m.classes)}  subjects={len(m.subjects)}  teachers={len(m.teachers)}")
 
     print("Solving (CP-SAT) ...")
-    solution, status, obj = solve(m, max_seconds=args.seconds, log=args.log)
+    solution, status, obj, pin_notes = solve(m, max_seconds=args.seconds, log=args.log)
     print(f"  status={status}  objective={obj:.0f}  placed={len(solution)} slots")
+    for note in pin_notes:
+        print("  PIN    :", note)
 
     print("Verifying ...")
     errors, warnings = verify(m, solution)

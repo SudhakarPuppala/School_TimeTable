@@ -71,6 +71,17 @@ KARATE_PERIOD = 7
 KARATE_CLASSES = {"Class 1(A)", "CLASS 1(B)", "Class 2", "Class 3", "Class 4",
                   "Class 5", "Class 6", "Class 7", "Class 8"}
 
+# ---- per-(class, subject) period pins ---------------------------------------
+#   Rule 12 : Chandrakala's Class-2 Maths only in Period 7
+#   Rule 13 : Class 1(A) P.E.T in Period 7
+# If the weekly count exceeds the usable slots in that period (e.g. Thursday P7
+# is Karate), the solver auto-relaxes the overflow into the previous period and
+# reports it. Value = preferred period.
+PINNED_PERIOD = {
+    ("Class 2", "Maths"): 7,
+    ("Class 1(A)", "P.E.T"): 7,
+}
+
 # ---- teacher-name aliases: fix data-entry variants -> one canonical name ----
 _TEACHER_ALIASES = {
     "S.GAYATRI": "S.GAYATHRI",   # typo of S.GAYATHRI (Class 2 G.K)
