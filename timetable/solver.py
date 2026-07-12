@@ -84,12 +84,8 @@ def _build_and_solve(m: Model, windows, max_seconds, log):
         for d in range(N_DAYS):
             for p in m.teachable_periods(c):
                 vs = by_slot[(c, d, p)]
-                if not vs:
-                    continue
-                if c in m.study_hour_classes and p <= 7:
-                    model.Add(sum(vs) == 1)
-                else:
-                    model.Add(sum(vs) <= 1)
+                if vs:
+                    model.Add(sum(vs) <= 1)          # at most one subject per slot
 
     for (t, d, p), vs in by_teacher_slot.items():
         if len(vs) > 1:

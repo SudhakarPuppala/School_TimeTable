@@ -100,11 +100,12 @@ def main():
         if len(cs) > 1:
             fail.append(f"[DOUBLE-BOOK] {t} @ {DAYS[d]}P{p}: {cs}")
 
+    # study-hour classes: P1-P7 filled == their content (free periods allowed if content < 42)
     for c in m.study_hour_classes:
-        for d in range(6):
-            for p in range(1, 8):
-                if (c, d, p) not in sol:
-                    fail.append(f"[EMPTY] {c} {DAYS[d]}P{p}")
+        content = sum(m.plan.get((c, s), 0) for s in m.subjects)
+        filled = sum(1 for d in range(6) for p in range(1, 8) if (c, d, p) in sol)
+        if filled != content:
+            fail.append(f"[PACK] {c}: {filled} taught in P1-P7 but content is {content}")
     capacity = sum(1 for d in range(6) for p in range(1, 9)
                    if not (p == 8 and DAYS[d] in cfg.no_p8_days))
     for c in cfg.no_study_hour:
