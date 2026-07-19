@@ -9,8 +9,10 @@ the styled workbook / PDF.
 """
 from __future__ import annotations
 import os
+import subprocess
 import tempfile
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -19,7 +21,8 @@ import streamlit as st
 
 from timetable.model import (load_model, DAYS, GENERIC_TEACHERS,
                              INPUTS, LEISURE_COLS, SHEET_PLAN, SHEET_ALLOT,
-                             SHEET_P1, SHEET_LEISURE, SCHOOLS as SCHOOLS_CFG)
+                             SHEET_P1, SHEET_LEISURE, SHEET_ACTIVITY,
+                             SCHOOLS as SCHOOLS_CFG)
 from timetable.conflicts import (check_conflicts, has_errors, error_cells,
                                  class_capacity, class_content,
                                  teacher_capacity, teacher_demand)
@@ -158,7 +161,32 @@ def read_frames(path):
     leisure = pd.DataFrame(body, columns=LEISURE_COLS)
     if not body:
         leisure = pd.DataFrame(columns=LEISURE_COLS)
-    return {"plan": plan, "allot": allot, "p1": p1, "leisure": leisure}
+
+    # --- Activity Plan (optional sheet) ---
+    rows = rows_of(SHEET_ACTIVITY)
+    act_cols = ["Activity", "Allowed Periods"] + classes
+    body = []
+    hdr = next((i for i, r in enumerate(rows)
+                if r and r[0] and str(r[0]).strip().lower().startswith("activity")
+                and _fill_count(r) >= 1), None)
+    if hdr is not None:
+        head = [str(v).strip() if v not in (None, "") else "" for v in rows[hdr]]
+        for r in rows[hdr + 1:]:
+            if not r or r[0] in (None, ""):
+                continue
+            rec = {c: "" for c in act_cols}
+            rec["Activity"] = str(r[0]).strip()
+            for j, h in enumerate(head):
+                if j == 0 or j >= len(r) or r[j] in (None, ""):
+                    continue
+                if "period" in h.lower() or h.lower() == "allowed":
+                    rec["Allowed Periods"] = str(r[j]).strip()
+                elif h in classes:
+                    rec[h] = str(r[j]).strip()
+            body.append(rec)
+    activity = pd.DataFrame(body, columns=act_cols)
+    return {"plan": plan, "allot": allot, "p1": p1, "leisure": leisure,
+            "activity": activity}
 
 
 def _cell(v):
@@ -199,6 +227,16 @@ def write_frames(frames, path):
             continue
         ws.append([_cell(r.get(c, "")) if c != "Lunch Break" else "Lunch Break"
                    for c in LEISURE_COLS])
+
+    activity = frames.get("activity")
+    if activity is not None:
+        ws = wb.create_sheet(SHEET_ACTIVITY)
+        ws.append([SHEET_ACTIVITY])
+        ws.append(list(activity.columns))
+        for _, r in activity.iterrows():
+            if _cell(r.get("Activity", "")) == "":
+                continue
+            ws.append([_cell(v) for v in r.tolist()])
     wb.save(path)
     return path
 
@@ -207,6 +245,33 @@ def frames_to_model(frames, school):
     tmp = os.path.join(tempfile.gettempdir(), f"tt_edit_{school}.xlsx")
     write_frames(frames, tmp)
     return load_model(tmp, school), tmp
+
+
+def git_commit_push(path, school):
+    """Commit the saved workbook and push to GitHub. -> (ok, message)."""
+    repo = os.path.dirname(os.path.abspath(__file__))
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                              text=True, timeout=120)
+
+    r = run("add", "--", os.path.abspath(path))
+    if r.returncode != 0:
+        return False, f"git add failed: {r.stderr.strip() or r.stdout.strip()}"
+    r = run("diff", "--cached", "--quiet", "--", os.path.abspath(path))
+    if r.returncode == 0:
+        return True, "No changes to commit (workbook identical to last commit)."
+    stamp = datetime.now().strftime("%d %b %Y %H:%M")
+    r = run("commit", "-m",
+            f"{school}: dashboard edit of information workbook ({stamp})\n\n"
+            f"Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>")
+    if r.returncode != 0:
+        return False, f"git commit failed: {r.stderr.strip() or r.stdout.strip()}"
+    r = run("push")
+    if r.returncode != 0:
+        return False, ("Committed locally, but git push failed "
+                       f"(will push next time): {r.stderr.strip()[:200]}")
+    return True, "Committed and pushed to GitHub."
 
 
 # ------------------------------------------------------------------ visual grids
@@ -325,8 +390,10 @@ with st.sidebar:
     check_btn = st.button("🔍  Check conflicts", width="stretch")
     generate = st.button("⚙️  Generate timetable", type="primary", width="stretch")
     save_src = st.button("💾  Save edits to source workbook", width="stretch")
+    auto_git = st.checkbox("⬆️ Auto commit & push to GitHub on save", value=True)
     st.caption("Check = validate the current edits and highlight conflicts in red. "
-               "Generate = conflict-check + solve. Save = write edits back to the workbook.")
+               "Generate = conflict-check + solve. Save = write edits back to the workbook"
+               " (and check them into GitHub when the box is ticked).")
 
 if (st.session_state.get("school"), st.session_state.get("path")) != (school, input_path):
     st.session_state.school = school
@@ -422,6 +489,20 @@ with tab_data:
                 st.dataframe(style_red(edited["leisure"], "Teacher Name", bad[SHEET_LEISURE]),
                              width="stretch", hide_index=True)
 
+        # ---------- Activity Plan (P.E.T / Karate) ----------
+        st.subheader("Activity Plan — parallel activities (P.E.T, Karate)")
+        st.caption("**Allowed Periods** (e.g. `6,7`) restricts when the activity can be "
+                   "scheduled — blank means any period. Give classes the **same group "
+                   "label** (e.g. Primary / Secondary) to combine their sessions: the "
+                   "solver schedules grouped classes together whenever the weekly counts "
+                   "allow. Blank cell = not combined.")
+        edited["activity"] = st.data_editor(f["activity"], width="stretch",
+                                            num_rows="dynamic", key=f"activity_{school}")
+        if SHEET_ACTIVITY in bad:
+            with st.expander("🔴 Activity-Plan cells named in conflicts", expanded=True):
+                st.dataframe(style_red(edited["activity"], "Activity", bad[SHEET_ACTIVITY]),
+                             width="stretch", hide_index=True)
+
         st.session_state.edited = edited
 
         # ---------- teacher load (over-assignment) ----------
@@ -471,10 +552,18 @@ if check_btn and "edited" in st.session_state:
     st.rerun()
 
 if save_src and "edited" in st.session_state:
-    write_frames(st.session_state.edited, input_path)
+    try:
+        write_frames(st.session_state.edited, input_path)
+    except PermissionError:
+        st.sidebar.error(f"Cannot save: {input_path} is open in Excel — close it and retry.")
+        st.stop()
+    msg = f"Saved edits to {input_path}"
+    if auto_git:
+        ok, gitmsg = git_commit_push(input_path, school)
+        (st.sidebar.success if ok else st.sidebar.warning)(f"{msg}\n\n{gitmsg}")
+    else:
+        st.sidebar.success(msg)
     st.session_state.pop("frames", None)
-    st.sidebar.success(f"Saved edits to {input_path}")
-    st.rerun()
 
 if generate and "edited" in st.session_state:
     m, conflicts = run_conflict_check()

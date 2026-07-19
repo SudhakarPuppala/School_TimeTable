@@ -37,6 +37,7 @@ SHEET_PLAN = "Weekly Period Plan"
 SHEET_ALLOT = "Teacher Allotment"
 SHEET_P1 = "Period 1 teacher allotment"
 SHEET_LEISURE = "Teacher Leisure Plan"
+SHEET_ACTIVITY = "Activity Plan"
 
 # Generic "whole class at once" instructors: exempt from double-booking because
 # an external instructor (or several) handles all classes.  These labels are a
@@ -207,6 +208,8 @@ class Model:
     blocked: dict = field(default_factory=dict)       # teacher -> {hard-blocked periods}
     soft_blocked: dict = field(default_factory=dict)  # teacher -> {soft-avoid periods}
     leisure_teachers: list = field(default_factory=list)   # sheet order
+    activity_window: dict = field(default_factory=dict)    # subject -> {allowed periods}
+    activity_group: dict = field(default_factory=dict)     # (subject, class) -> group label
     issues: list = field(default_factory=list)        # load-time Issues
     subjects_of: dict = field(default_factory=dict)
 
@@ -421,6 +424,79 @@ LEISURE_COLS = ["Teacher Name", "Leisure Fitment", "Period 1", "Period 2", "Peri
                 "Period 4", "Lunch Break", "Period 5", "Period 6", "Period 7", "Study Hour"]
 
 
+def parse_period_list(raw):
+    """'6,7' / 'P6, P7' / '6-7' / 'Study Hour' -> {6, 7} / {8}.  Blank -> None."""
+    if raw in (None, ""):
+        return None
+    s = str(raw)
+    out = set()
+    if re.search(r"study", s, re.I) or re.search(r"\bSH\b", s, re.I):
+        out.add(STUDY_PERIOD)
+    for a, b in re.findall(r"(\d+)\s*-\s*(\d+)", s):
+        out.update(range(int(a), int(b) + 1))
+    s2 = re.sub(r"\d+\s*-\s*\d+", "", s)
+    out.update(int(n) for n in re.findall(r"\d+", s2))
+    return {p for p in out if 1 <= p <= 8} or None
+
+
+def _read_activity(rows, cres, subjects, issues):
+    """Activity Plan sheet: Activity | Allowed Periods | <class cols with group labels>.
+    -> (activity_window {subject: set}, activity_group {(subject, class): label}).
+    The sheet is optional; blank Allowed Periods = any period; blank class cell =
+    that class's sessions are not combined."""
+    window, group = {}, {}
+    if not rows:
+        return window, group
+    hdr_i, ap_col, cols = None, None, {}
+    for i, r in enumerate(rows):
+        if not r or r[0] in (None, "") or not _compact(r[0]).startswith("ACTIVITY"):
+            continue
+        for j, v in enumerate(r):
+            if j == 0 or v in (None, ""):
+                continue
+            k = _compact(v)
+            if "PERIOD" in k or k == "ALLOWED":
+                ap_col = j
+            else:
+                c = cres.resolve(v)
+                if c:
+                    cols[j] = c
+        if len(cols) >= 3 or ap_col is not None:
+            hdr_i = i
+            break
+        cols = {}
+    if hdr_i is None:
+        return window, group
+
+    subj_keys = {_compact(s): s for s in subjects}
+
+    def subj_resolve(raw):
+        k = _compact(raw)
+        if k in subj_keys:
+            return subj_keys[k]
+        pref = [s for key, s in subj_keys.items() if key.startswith(k) or k.startswith(key)]
+        return pref[0] if len(pref) == 1 else None
+
+    for r in rows[hdr_i + 1:]:
+        if not r or r[0] in (None, ""):
+            continue
+        subj = subj_resolve(r[0])
+        if subj is None:
+            issues.append(Issue("warning",
+                                f"Activity Plan row '{r[0]}' does not match any Weekly-Plan "
+                                f"subject — row ignored", SHEET_ACTIVITY, str(r[0]).strip()))
+            continue
+        if ap_col is not None and ap_col < len(r):
+            ps = parse_period_list(r[ap_col])
+            if ps:
+                window[subj] = ps
+        for j, cl in cols.items():
+            v = r[j] if j < len(r) else None
+            if v not in (None, ""):
+                group[(subj, cl)] = str(v).strip()
+    return window, group
+
+
 def _read_leisure(rows, issues):
     """-> (order, fitment, blocked, soft_blocked)."""
     hdr_i = next((i for i, r in enumerate(rows)
@@ -485,11 +561,12 @@ def load_model(path, school="NRHS"):
     wb = openpyxl.load_workbook(path, data_only=True)
     issues = []
 
-    def sheet_rows(name):
+    def sheet_rows(name, required=True):
         for ws in wb.worksheets:
             if _compact(ws.title) == _compact(name):
                 return _grid(ws)
-        issues.append(Issue("error", f"Sheet '{name}' not found in workbook", name))
+        if required:
+            issues.append(Issue("error", f"Sheet '{name}' not found in workbook", name))
         return []
 
     classes, subjects, plan = _read_plan(sheet_rows(SHEET_PLAN), issues)
@@ -497,6 +574,8 @@ def load_model(path, school="NRHS"):
     allot_raw = _read_allotment(sheet_rows(SHEET_ALLOT), cres, subjects, issues)
     p1_raw, study_raw = _read_p1(sheet_rows(SHEET_P1), cres, issues)
     order, fitment, blocked, soft = _read_leisure(sheet_rows(SHEET_LEISURE), issues)
+    activity_window, activity_group = _read_activity(
+        sheet_rows(SHEET_ACTIVITY, required=False), cres, subjects, issues)
 
     # ---- resolve teacher names against the Leisure-Plan spelling ----
     resolver = NameResolver(order)
@@ -568,4 +647,5 @@ def load_model(path, school="NRHS"):
                  study_supervisor=study_supervisor, teachers=teachers,
                  study_hour_classes=study_hour_classes,
                  fitment=fitment, blocked=blocked, soft_blocked=soft,
-                 leisure_teachers=order, issues=issues, subjects_of=subjects_of)
+                 leisure_teachers=order, activity_window=activity_window,
+                 activity_group=activity_group, issues=issues, subjects_of=subjects_of)

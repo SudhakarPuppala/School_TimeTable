@@ -58,6 +58,8 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
                 continue                                    # precheck reports this
             parallel = teacher in GENERIC_TEACHERS
             allowed = set(teachable)
+            if s in m.activity_window:               # Activity Plan: allowed periods
+                allowed &= m.activity_window[s]
             if not parallel:
                 allowed &= m.teacher_allowed(teacher)
                 if teacher in supervisors:
@@ -140,6 +142,26 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
         if p == STUDY_PERIOD:
             penalties.append((3, v))
 
+    # Activity Plan groups: combine sessions — minimise the number of distinct
+    # (day, period) sessions per (activity, group) so grouped classes do the
+    # activity together whenever the weekly counts allow.
+    groups = defaultdict(list)                       # (subject, label) -> classes
+    for (s, c), label in m.activity_group.items():
+        if c in m.classes and m.plan.get((c, s), 0) > 0:
+            groups[(s, label)].append(c)
+    for (s, label), cls_list in groups.items():
+        if len(cls_list) < 2:
+            continue
+        for d in range(N_DAYS):
+            for p in range(1, 9):
+                vs = [x[(c, s, d, p)] for c in cls_list if (c, s, d, p) in x]
+                if not vs:
+                    continue
+                sess = model.NewBoolVar(f"sess_{s}_{label}_{d}_{p}")
+                for v in vs:
+                    model.Add(sess >= v)
+                penalties.append((12, sess))
+
     # same subject twice in a day
     for c in m.classes:
         for s in m.subjects_of[c]:
@@ -177,4 +199,17 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
     for t, d, p in soft_hits:
         notes.append(f"BEST leisure not honoured: {t} teaches at {d} P{p} "
                      f"(marked Leisure, fitment BEST)")
+    for (s, label), cls_list in sorted(groups.items()):
+        if len(cls_list) < 2:
+            continue
+        sess = defaultdict(list)
+        for c in cls_list:
+            for d in range(N_DAYS):
+                for p in range(1, 9):
+                    if (c, s, d, p) in x and solver.Value(x[(c, s, d, p)]) == 1:
+                        sess[(d, p)].append(c)
+        detail = "; ".join(f"{DAYS[d]} P{p} ({len(cs)} classes)"
+                           for (d, p), cs in sorted(sess.items()))
+        notes.append(f"{s} '{label}' group: {len(sess)} combined session(s) for "
+                     f"{len(cls_list)} classes — {detail}")
     return solution, solver.StatusName(status), solver.ObjectiveValue(), notes

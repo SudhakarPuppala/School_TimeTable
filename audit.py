@@ -129,6 +129,12 @@ def main():
         if p in m.blocked.get(t, set()):
             fail.append(f"[LEISURE] {t} @ {DAYS[d]}P{p} ({c}) is marked Leisure (MUST)")
 
+    # 6b. Activity-Plan windows honoured
+    for (c, d, p), (t, s) in sol.items():
+        if s in m.activity_window and p not in m.activity_window[s]:
+            fail.append(f"[ACTIVITY-WINDOW] {s} ({c}) @ {DAYS[d]}P{p} "
+                        f"allowed {sorted(m.activity_window[s])}")
+
     # 7. Class sheet and Teacher sheet tally
     for (c, d, p), (t, s) in sol.items():
         if t in GENERIC_TEACHERS:
@@ -148,7 +154,8 @@ def main():
     print("=" * 60)
     for ck in ["weekly counts", "teacher==allotment", "no double-booking",
                "grid packed / free-slots", "study-hour supervisors",
-               "Teacher Leisure Plan (MUST)", "Class<->Teacher sheet agreement"]:
+               "Teacher Leisure Plan (MUST)", "Activity-Plan windows",
+               "Class<->Teacher sheet agreement"]:
         print(f"  + checked: {ck}")
     print("=" * 60)
     if fail:
