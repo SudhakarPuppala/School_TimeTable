@@ -23,6 +23,11 @@ from timetable.pdf import write_pdf
 PARALLEL = {"P.E", "MARTIAL ARTS", "Martial Arts", "P.E.T Instructor", "Karate Instructor"}
 
 
+def _append(day_row, period, text):
+    """Accumulate multiple classes in one slot (combined P.E/Karate sessions)."""
+    day_row[period] = f"{day_row[period]}\n{text}" if day_row[period] else text
+
+
 def parse_class_sheet(ws):
     """-> (tgrid, solution, supervisors, classes, teachers)."""
     classes = {c: str(ws.cell(1, c).value).strip()
@@ -51,9 +56,9 @@ def parse_class_sheet(ws):
             teachers.add(teacher)
             if subj.upper() == "CLASS" or (is_study and not subj):
                 supervisors[cls] = teacher
-                tgrid[teacher][day][STUDY_PERIOD] = cls
+                _append(tgrid[teacher][day], STUDY_PERIOD, cls)
             else:
-                tgrid[teacher][day][period] = f"{cls} ({subj})" if subj else cls
+                _append(tgrid[teacher][day], period, f"{cls} ({subj})" if subj else cls)
                 solution[(cls, day, period)] = (subj, teacher)
     return tgrid, solution, supervisors, list(classes.values()), teachers
 

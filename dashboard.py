@@ -352,15 +352,27 @@ def class_grid(m, solution, cls):
 
 
 def teacher_grid(m, solution, teacher, class_color):
-    g = [["—"] * 6 for _ in range(8)]
+    """Cells hold every class in the slot — a combined P.E/Karate session has
+    several classes at once."""
+    cell = defaultdict(list)
+    pos = {c: i for i, c in enumerate(m.classes)}
     for (c, d, p), (s, t) in solution.items():
         if t == teacher:
-            g[p - 1][d] = (c, m.abbr(s), "class")
+            cell[(d, p)].append((pos.get(c, 99), c, m.abbr(s)))
     for c in m.study_hour_classes:
         if m.study_supervisor.get(c) == teacher:
             for d in range(6):
                 if m.has_p8(DAYS[d]):
-                    g[7][d] = (c, "STUDY", "class")
+                    cell[(d, 8)].append((pos.get(c, 99), c, "STUDY"))
+    g = [["—"] * 6 for _ in range(8)]
+    for (d, p), entries in cell.items():
+        entries.sort()
+        if len(entries) == 1:
+            _, c, ab = entries[0]
+            g[p - 1][d] = (c, ab, "class")
+        else:                                   # combined session
+            ab = entries[0][2]
+            g[p - 1][d] = (ab, ", ".join(c for _, c, _ in entries), "subj")
     return g
 
 

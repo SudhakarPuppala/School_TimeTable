@@ -45,15 +45,25 @@ def _class_grid(m, solution, c):
 
 
 def _teacher_grid(m, solution, teacher):
-    g = [["—"] * 6 for _ in range(8)]
+    """Combined P.E/Karate sessions put several classes in one slot."""
+    from collections import defaultdict
+    pos = {c: i for i, c in enumerate(m.classes)}
+    cell = defaultdict(list)
     for (c, d, p), (s, t) in solution.items():
         if t == teacher:
-            g[p - 1][d] = (m.abbr(s), c)
+            cell[(d, p)].append((pos.get(c, 99), c, m.abbr(s)))
     for c in m.study_hour_classes:
         if m.study_supervisor.get(c) == teacher:
             for d in range(6):
                 if m.has_p8(DAYS[d]):
-                    g[7][d] = ("STUDY", c)
+                    cell[(d, 8)].append((pos.get(c, 99), c, "STUDY"))
+    g = [["—"] * 6 for _ in range(8)]
+    for (d, p), entries in cell.items():
+        entries.sort()
+        if len(entries) == 1:
+            g[p - 1][d] = (entries[0][2], entries[0][1])
+        else:
+            g[p - 1][d] = (entries[0][2], ", ".join(c for _, c, _ in entries))
     return g
 
 

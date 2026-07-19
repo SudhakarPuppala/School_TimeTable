@@ -55,7 +55,9 @@ def parse_teacher_sheet(path, m):
             for c in range(2, 10):
                 raw = ws.cell(r, c).value
                 if raw:
-                    grid[(teacher, day, 8 if c == 9 else c - 1)].add(str(raw).strip())
+                    for line in str(raw).split("\n"):     # combined sessions: 1 class/line
+                        if line.strip():
+                            grid[(teacher, day, 8 if c == 9 else c - 1)].add(line.strip())
     return grid
 
 
@@ -139,27 +141,31 @@ def main():
             fail.append(f"[ACTIVITY-DAY] {s} ({c}) on {DAYS[d]} "
                         f"allowed {[DAYS[i] for i in sorted(ds)]}")
 
-    # 7. Class sheet and Teacher sheet tally
+    # 7. Class sheet and Teacher sheet tally BOTH WAYS, generic instructors
+    #    (P.E / MARTIAL ARTS combined sessions) included: every entry on either
+    #    sheet must appear on the other.
+    expected = set()
     for (c, d, p), (t, s) in sol.items():
-        if t in GENERIC_TEACHERS:
-            continue
-        exp = f"{c} ({m.abbr(s)})"
-        if exp not in tgrid.get((t, d, p), set()):
-            fail.append(f"[SHEET-MISMATCH] {t} @ {DAYS[d]}P{p}: Class says '{exp}', "
-                        f"Teacher sheet {tgrid.get((t, d, p)) or 'nothing'}")
+        expected.add((t, d, p, f"{c} ({m.abbr(s)})"))
     for c in m.study_hour_classes:
         t = m.study_supervisor.get(c)
         for d in range(6):
-            if t and m.has_p8(DAYS[d]) and c not in tgrid.get((t, d, 8), set()):
-                fail.append(f"[SHEET-MISMATCH] supervisor {t} @ {DAYS[d]} Study Hour: "
-                            f"Teacher sheet missing '{c}'")
+            if t and m.has_p8(DAYS[d]):
+                expected.add((t, d, 8, c))
+    parsed = {(t, d, p, line) for (t, d, p), lines in tgrid.items() for line in lines}
+    for t, d, p, line in sorted(expected - parsed):
+        fail.append(f"[SHEET-MISSING] {t} @ {DAYS[d]}P{p}: Class sheet has '{line}' "
+                    f"but the Teacher sheet does not")
+    for t, d, p, line in sorted(parsed - expected):
+        fail.append(f"[SHEET-EXTRA] {t} @ {DAYS[d]}P{p}: Teacher sheet shows '{line}' "
+                    f"but the Class sheet does not")
 
     print(f"INDEPENDENT AUDIT of {args.out}  (school={args.school})")
     print("=" * 60)
     for ck in ["weekly counts", "teacher==allotment", "no double-booking",
                "grid packed / free-slots", "study-hour supervisors",
                "Teacher Leisure Plan (MUST)", "Activity-Plan windows",
-               "Class<->Teacher sheet agreement"]:
+               "Class<->Teacher sheet agreement (both ways, incl. combined sessions)"]:
         print(f"  + checked: {ck}")
     print("=" * 60)
     if fail:

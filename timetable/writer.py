@@ -92,15 +92,18 @@ def write_teacher_sheet(wb, m: Model, solution):
     _cell(ws, 1, 1, cfg.teacher_title, NAVY, Font(bold=True, color="FFFFFF", size=13))
     ws.merge_cells("A1:I1")
 
-    tgrid = defaultdict(lambda: [["" for _ in range(9)] for _ in range(N_DAYS)])
+    # a combined activity session (P.E / MARTIAL ARTS) puts SEVERAL classes in
+    # one teacher slot, so every cell is a list, rendered one class per line
+    class_pos = {c: i for i, c in enumerate(m.classes)}
+    tgrid = defaultdict(lambda: [[[] for _ in range(9)] for _ in range(N_DAYS)])
     for (c, d, p), (s, t) in solution.items():
-        tgrid[t][d][p] = f"{c} ({m.abbr(s)})"
+        tgrid[t][d][p].append((class_pos.get(c, 99), f"{c} ({m.abbr(s)})"))
     for c in m.study_hour_classes:
         t = m.study_supervisor.get(c)
         if t:
             for d in range(N_DAYS):
                 if m.has_p8(DAYS[d]):
-                    tgrid[t][d][STUDY_PERIOD] = c
+                    tgrid[t][d][STUDY_PERIOD].append((class_pos.get(c, 99), c))
 
     generic = [g for g in sorted(GENERIC_TEACHERS)
                if any(tt == g for _, tt in solution.values())]
@@ -118,11 +121,16 @@ def write_teacher_sheet(wb, m: Model, solution):
         row += 1
         for d in range(N_DAYS):
             _cell(ws, row, 1, DAYS[d], PERFILL, Font(bold=True, size=10))
+            max_lines = 1
             for p in range(1, 9):
-                txt = tgrid[t][d][p]
+                entries = sorted(tgrid[t][d][p])
+                txt = "\n".join(text for _, text in entries)
+                max_lines = max(max_lines, len(entries))
                 col = 9 if p == STUDY_PERIOD else p + 1
                 fill = STUDYFILL if (p == STUDY_PERIOD and txt) else None
                 _cell(ws, row, col, txt, fill)
+            if max_lines > 1:
+                ws.row_dimensions[row].height = max(20, 13 * max_lines)
             row += 1
         row += 1
 
