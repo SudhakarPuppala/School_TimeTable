@@ -9,6 +9,7 @@ the styled workbook / PDF.
 """
 from __future__ import annotations
 import os
+import re
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -260,31 +261,81 @@ def frames_to_model(frames, school):
     return load_model(tmp, school), tmp
 
 
+def _github_token():
+    """GitHub token from Streamlit secrets (for cloud deployments)."""
+    try:
+        if "GITHUB_TOKEN" in st.secrets:
+            return str(st.secrets["GITHUB_TOKEN"]).strip() or None
+        if "github" in st.secrets and "token" in st.secrets["github"]:
+            return str(st.secrets["github"]["token"]).strip() or None
+    except Exception:
+        pass
+    return None
+
+
 def git_commit_push(path, school):
-    """Commit the saved workbook and push to GitHub. -> (ok, message)."""
+    """Commit the saved workbook and push to GitHub. -> (ok, message).
+
+    Works both locally (uses your normal git credentials) and on Streamlit
+    Cloud: there the container has no git identity or credentials, so the
+    commit uses a built-in identity and the push authenticates with a GitHub
+    token read from the app's Secrets (GITHUB_TOKEN = "...").
+    """
     repo = os.path.dirname(os.path.abspath(__file__))
+    token = _github_token()
 
     def run(*args):
         return subprocess.run(["git", *args], cwd=repo, capture_output=True,
                               text=True, timeout=120)
 
+    def clean(*texts):
+        out = " ".join(t.strip() for t in texts if t and t.strip())
+        return out.replace(token, "***") if token else out
+
     r = run("add", "--", os.path.abspath(path))
     if r.returncode != 0:
-        return False, f"git add failed: {r.stderr.strip() or r.stdout.strip()}"
+        return False, f"git add failed: {clean(r.stderr, r.stdout)}"
     r = run("diff", "--cached", "--quiet", "--", os.path.abspath(path))
     if r.returncode == 0:
         return True, "No changes to commit (workbook identical to last commit)."
+
+    ident = []
+    if not (run("config", "user.email").stdout or "").strip():
+        ident = ["-c", "user.name=Timetable Dashboard",
+                 "-c", "user.email=timetable-dashboard@users.noreply.github.com"]
     stamp = datetime.now().strftime("%d %b %Y %H:%M")
-    r = run("commit", "-m",
-            f"{school}: dashboard edit of information workbook ({stamp})\n\n"
-            f"Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>")
+    r = run(*ident, "commit", "-m",
+            f"{school}: dashboard edit of information workbook ({stamp})")
     if r.returncode != 0:
-        return False, f"git commit failed: {r.stderr.strip() or r.stdout.strip()}"
-    r = run("push")
+        return False, f"git commit failed: {clean(r.stderr, r.stdout)}"
+
+    branch = (run("rev-parse", "--abbrev-ref", "HEAD").stdout or "").strip()
+    if branch in ("", "HEAD"):
+        branch = "main"
+    push_args, auth_url = ["push"], None
+    if token:
+        origin = (run("remote", "get-url", "origin").stdout or "").strip()
+        mrepo = re.search(r"github\.com[:/](.+?)(?:\.git)?$", origin)
+        if mrepo:
+            auth_url = f"https://x-access-token:{token}@github.com/{mrepo.group(1)}.git"
+            push_args = ["push", auth_url, f"HEAD:{branch}"]
+    r = run(*push_args)
+    if r.returncode != 0 and auth_url and re.search(
+            r"fetch first|rejected|non-fast-forward", r.stderr or ""):
+        pr = run(*ident, "pull", "--rebase", auth_url, branch)
+        if pr.returncode == 0:
+            r = run(*push_args)
+        else:
+            run("rebase", "--abort")
     if r.returncode != 0:
-        return False, ("Committed locally, but git push failed "
-                       f"(will push next time): {r.stderr.strip()[:200]}")
-    return True, "Committed and pushed to GitHub."
+        hint = ("" if token else
+                " — on Streamlit Cloud, add a GitHub token to the app's Secrets as "
+                'GITHUB_TOKEN = "..." so the dashboard can push (see README)')
+        return False, (f"Committed in the app, but git push failed{hint}: "
+                       f"{clean(r.stderr)[:300]}")
+    extra = (" The cloud app will restart with the new data in a minute."
+             if token else "")
+    return True, "Committed and pushed to GitHub." + extra
 
 
 # ------------------------------------------------------------------ visual grids

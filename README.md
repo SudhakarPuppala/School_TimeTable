@@ -84,3 +84,25 @@ the data has errors, e.g.:
 
 The dashboard highlights the offending cells in **red** and shows live Total
 rows (plan) and a per-teacher load-vs-availability table.
+
+## Saving edits & GitHub check-in
+
+**Save edits to source workbook** writes the four sheets back to the school's
+information workbook and (with the sidebar toggle on) commits & pushes it to
+GitHub automatically.
+
+- **Running locally**: uses your normal git credentials — nothing to set up.
+- **Running on Streamlit Community Cloud**: the container has no git
+  credentials, so add a token to the app's **Secrets** (Manage app →
+  Settings → Secrets):
+
+  ```toml
+  GITHUB_TOKEN = "github_pat_..."
+  ```
+
+  Create it at GitHub → Settings → Developer settings → Fine-grained personal
+  access tokens: select **only** this repository and grant **Contents: Read
+  and write**. The dashboard then commits as "Timetable Dashboard" and pushes
+  over HTTPS with the token (a rejected push is retried after `pull --rebase`).
+  Each cloud save triggers a redeploy, so the app restarts on the new data —
+  edits made in the cloud persist.
