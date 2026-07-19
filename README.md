@@ -43,6 +43,16 @@ python -m streamlit run dashboard.py        # interactive dashboard
 | Teacher Allotment | teacher assigned to each (subject, class) |
 | Period 1 teacher allotment | per class: Period-1 teacher + Study-Hour supervisor |
 | **Teacher Leisure Plan** | per teacher: **Leisure Fitment** (MUST/BEST) + `Leisure` marks per period |
+| **Activity Plan** *(optional)* | each row = one **combined session group**: Activity, **Allowed Days** (`MON,TUE` / `MON-THU`, blank = any), **Allowed Periods** (`6,7`, blank = any), and a tick per class in the group |
+
+### Activity Plan semantics
+
+- Ticked classes may only do that activity inside the row's **days × periods**
+  window (hard), and the solver **combines** their sessions — grouped classes do
+  the activity together whenever the weekly counts allow.
+- A class ticked in no row is scheduled independently with no restriction.
+- P.E.T / Karate are parallel whole-class activities (generic `P.E` /
+  `MARTIAL ARTS` instructors, no double-booking constraint).
 
 ### Teacher Leisure Plan semantics
 

@@ -60,11 +60,14 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
             allowed = set(teachable)
             if (s, c) in m.activity_window:          # Activity Plan: allowed periods
                 allowed &= m.activity_window[(s, c)]
+            act_days = m.activity_days.get((s, c))   # Activity Plan: allowed days
             if not parallel:
                 allowed &= m.teacher_allowed(teacher)
                 if teacher in supervisors:
                     allowed.discard(STUDY_PERIOD)
             for d in range(N_DAYS):
+                if act_days is not None and d not in act_days:
+                    continue
                 for p in allowed:
                     if p == STUDY_PERIOD and not m.has_p8(DAYS[d]):
                         continue

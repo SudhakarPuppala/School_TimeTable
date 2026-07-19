@@ -164,7 +164,7 @@ def read_frames(path):
 
     # --- Activity Plan (optional sheet; each row = one combined-session group) ---
     rows = rows_of(SHEET_ACTIVITY)
-    act_cols = ["Activity", "Allowed Periods"] + classes
+    act_cols = ["Activity", "Allowed Days", "Allowed Periods"] + classes
     body = []
     hdr = next((i for i, r in enumerate(rows)
                 if r and r[0] and str(r[0]).strip().lower().startswith("activity")
@@ -179,7 +179,10 @@ def read_frames(path):
             for j, h in enumerate(head):
                 if j == 0 or j >= len(r) or r[j] in (None, ""):
                     continue
-                if "period" in h.lower() or h.lower() == "allowed":
+                hl = h.lower()
+                if "day" in hl and "period" not in hl:
+                    rec["Allowed Days"] = str(r[j]).strip()
+                elif "period" in hl or hl == "allowed":
                     rec["Allowed Periods"] = str(r[j]).strip()
                 elif h in classes:
                     rec[h] = _is_tick(r[j])
@@ -242,7 +245,7 @@ def write_frames(frames, path):
             row = []
             for col in activity.columns:
                 v = r[col]
-                if col in ("Activity", "Allowed Periods"):
+                if col in ("Activity", "Allowed Days", "Allowed Periods"):
                     row.append(_cell(v))
                 else:
                     row.append("Yes" if v is True or _is_tick(v) else "")
@@ -502,14 +505,17 @@ with tab_data:
         # ---------- Activity Plan (P.E.T / Karate) ----------
         st.subheader("Activity Plan — parallel activities (P.E.T, Karate)")
         st.caption("**Each row is one combined session group**: tick the classes that do "
-                   "the activity **together**, and set that row's **Allowed Periods** "
-                   "(e.g. `6,7` — blank = any period). Add rows to make more "
+                   "the activity **together**, and set that row's **Allowed Days** "
+                   "(e.g. `MON,TUE` or `MON-THU` — blank = any day) and **Allowed "
+                   "Periods** (e.g. `6,7` — blank = any period). Add rows to make more "
                    "combinations. A class ticked in no row is scheduled independently "
-                   "with no period restriction.")
+                   "with no restriction.")
         act_cfg = {"Activity": st.column_config.TextColumn("Activity"),
+                   "Allowed Days": st.column_config.TextColumn(
+                       "Allowed Days", help="e.g. MON,TUE or MON-THU or blank for any day"),
                    "Allowed Periods": st.column_config.TextColumn(
-                       "Allowed Periods", help="e.g. 6,7 or 5-7 or blank for any")}
-        for c in f["activity"].columns[2:]:
+                       "Allowed Periods", help="e.g. 6,7 or 5-7 or blank for any period")}
+        for c in f["activity"].columns[3:]:
             act_cfg[c] = st.column_config.CheckboxColumn(c, default=False)
         edited["activity"] = st.data_editor(f["activity"], width="stretch",
                                             num_rows="dynamic", key=f"activity_{school}",

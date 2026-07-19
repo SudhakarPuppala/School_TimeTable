@@ -17,7 +17,7 @@ Checks:
 from __future__ import annotations
 from itertools import combinations
 
-from .model import (Model, Issue, STUDY_PERIOD, GENERIC_TEACHERS,
+from .model import (Model, Issue, DAYS, STUDY_PERIOD, GENERIC_TEACHERS,
                     SHEET_PLAN, SHEET_ALLOT, SHEET_P1, SHEET_LEISURE, SHEET_ACTIVITY)
 
 
@@ -31,13 +31,6 @@ def class_capacity(m: Model, cls):
 
 def class_content(m: Model, cls):
     return sum(m.plan.get((cls, s), 0) for s in m.subjects)
-
-
-def _days_with_period(m: Model, cls, p):
-    """How many days per week period p is schedulable for this class."""
-    if p == STUDY_PERIOD:
-        return m.study_days() if cls not in m.study_hour_classes else 0
-    return 6
 
 
 def teacher_capacity(m: Model, t):
@@ -105,55 +98,68 @@ def check_conflicts(m: Model):
                              f"marks their Study Hour as Leisure (MUST)",
                              SHEET_LEISURE, t, "Study Hour"))
 
-    # ---- 5. per-class window arithmetic ----
-    # An "entry" is anything confined to a period window inside this class:
-    # a teacher (via the Leisure Plan) or an activity (via the Activity Plan).
+    # ---- 5. per-class window arithmetic (over (day, period) slot-sets) ----
+    # An "entry" is anything confined to a slot subset inside this class: a
+    # teacher (Leisure Plan periods) or an activity (Activity Plan days×periods).
     for c in m.classes:
         teachable = set(m.teachable_periods(c))
-        entries = []                       # (label, window, demand, sheet, row_key)
+
+        def slots(periods, day_set=None):
+            day_set = range(6) if day_set is None else day_set
+            return frozenset((d, p) for d in day_set for p in periods
+                             if p in teachable
+                             and not (p == STUDY_PERIOD and DAYS[d] in m.cfg.no_p8_days))
+
+        full = slots(teachable)
+        entries = []                       # (label, slotset, demand, sheet, row_key)
         dem = {}
         for s in m.subjects_of.get(c, []):
             t = m.teacher_of.get((c, s))
             n = m.plan[(c, s)]
             w_act = m.activity_window.get((s, c))
-            if w_act:
-                w = w_act & teachable
+            d_act = m.activity_days.get((s, c))
+            if w_act or d_act:
+                w = (w_act or teachable) & teachable
                 if t and t not in GENERIC_TEACHERS:
                     w &= m.teacher_allowed(t)
                     if t in supervisors:
                         w -= {STUDY_PERIOD}
-                if n > sum(_days_with_period(m, c, p) for p in w):
-                    plist = ", ".join(f"P{p}" for p in sorted(w_act))
+                ss = slots(w, d_act)
+                if n > len(ss):
+                    win = ", ".join(f"P{p}" for p in sorted(w_act)) if w_act else "any period"
+                    dtx = ("/".join(DAYS[d] for d in sorted(d_act)) if d_act else "any day")
                     out.append(Issue("error",
                                      f"{c}: {s} needs {n} periods/week but its Activity-Plan "
-                                     f"window ({plist}) only offers "
-                                     f"{sum(_days_with_period(m, c, p) for p in w)} slots",
+                                     f"window ({dtx} × {win}) only offers {len(ss)} slots",
                                      SHEET_ACTIVITY, s, "Allowed Periods"))
-                entries.append((s, frozenset(w), n, SHEET_ACTIVITY, s))
+                entries.append((s, ss, n, SHEET_ACTIVITY, s))
             elif t and t not in GENERIC_TEACHERS:
                 dem[t] = dem.get(t, 0) + n
         for t, n in dem.items():
             w = m.teacher_allowed(t) & teachable
             if t in supervisors:
                 w -= {STUDY_PERIOD}
-            entries.append((t, frozenset(w), n, SHEET_LEISURE, t))
-        restricted = sorted({w for _, w, _, _, _ in entries if w != frozenset(teachable)},
-                            key=sorted)
+            entries.append((t, slots(w), n, SHEET_LEISURE, t))
+        restricted = sorted({ss for _, ss, _, _, _ in entries if ss != full}, key=sorted)
         for r in range(1, min(len(restricted), 3) + 1):
             for combo in combinations(restricted, r):
                 u = frozenset().union(*combo)
-                cap = sum(_days_with_period(m, c, p) for p in u)
+                cap = len(u)
                 inside = [e for e in entries if e[1] <= u]
                 need = sum(e[2] for e in inside)
                 if need > cap:
-                    plist = f"P{'/P'.join(str(p) for p in sorted(u))}"
-                    who = ", ".join(f"{lbl} ({n})" for lbl, _, n, _, _ in sorted(inside))
-                    first = sorted(inside)[0]
+                    ps = sorted({p for _, p in u})
+                    ds = sorted({d for d, _ in u})
+                    where = (f"{'/'.join(DAYS[d] for d in ds)} × "
+                             f"P{'/P'.join(str(p) for p in ps)}")
+                    who = ", ".join(f"{lbl} ({n})" for lbl, _, n, _, _ in sorted(
+                        inside, key=lambda e: e[0]))
+                    first = sorted(inside, key=lambda e: e[0])[0]
                     out.append(Issue("error",
-                                     f"{c}: teachers/activities restricted to {plist} need "
+                                     f"{c}: teachers/activities restricted to {where} need "
                                      f"{need} periods but the class only has {cap} such "
                                      f"slots — {who}. Free a leisure period, widen the "
-                                     f"activity window, or reassign a subject",
+                                     f"activity days/periods, or reassign a subject",
                                      first[3], first[4],
                                      "Leisure Fitment" if first[3] == SHEET_LEISURE
                                      else "Allowed Periods"))

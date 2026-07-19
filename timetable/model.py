@@ -209,6 +209,7 @@ class Model:
     soft_blocked: dict = field(default_factory=dict)  # teacher -> {soft-avoid periods}
     leisure_teachers: list = field(default_factory=list)   # sheet order
     activity_window: dict = field(default_factory=dict)    # (subject, class) -> {periods}
+    activity_days: dict = field(default_factory=dict)      # (subject, class) -> {day idx}
     activity_group: dict = field(default_factory=dict)     # (subject, class) -> group label
     issues: list = field(default_factory=list)        # load-time Issues
     subjects_of: dict = field(default_factory=dict)
@@ -439,6 +440,27 @@ def parse_period_list(raw):
     return {p for p in out if 1 <= p <= 8} or None
 
 
+_DAY_IDX = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5}
+
+
+def parse_day_list(raw):
+    """'MON,TUE' / 'Monday Wednesday' / 'MON-THU' -> {0, 1} / {0, 2} / {0..3}.
+    Blank (or no recognisable day) -> None = any day."""
+    if raw in (None, ""):
+        return None
+    s = str(raw).upper()
+    out = set()
+    for a, b in re.findall(r"([A-Z]+)\s*-\s*([A-Z]+)", s):
+        ia, ib = _DAY_IDX.get(a[:3]), _DAY_IDX.get(b[:3])
+        if ia is not None and ib is not None and ia <= ib:
+            out.update(range(ia, ib + 1))
+    for t in re.findall(r"[A-Z]+", s):
+        i = _DAY_IDX.get(t[:3])
+        if i is not None:
+            out.add(i)
+    return out or None
+
+
 TICK_TOKENS = {"YES", "Y", "TRUE", "X", "OK", "1", "COMBINE", "COMBINED", "✓", "✔"}
 
 
@@ -452,21 +474,23 @@ def _is_tick(v):
 
 def _read_activity(rows, cres, subjects, issues):
     """Activity Plan sheet — each row is one COMBINED-SESSION group:
-        Activity | Allowed Periods | one column per class (tick = in this group)
+        Activity | Allowed Days | Allowed Periods | one column per class (tick)
 
-    Ticked classes get that row's Allowed Periods as a hard window and are
-    scheduled together whenever the weekly counts allow.  A class ticked in no
+    Ticked classes get that row's Allowed Days × Allowed Periods as a hard
+    window and are scheduled together whenever the weekly counts allow.
+    Blank days = any day; blank periods = any period.  A class ticked in no
     row for its activity has no restriction and is not combined.  Legacy text
     labels (e.g. 'Primary') in class cells still work: equal labels inside a
     row form their own sub-group.
 
-    -> (activity_window {(subject, class): set},
+    -> (activity_window {(subject, class): set-of-periods},
+        activity_days   {(subject, class): set-of-day-indices},
         activity_group  {(subject, class): group-label})
     """
-    window, group = {}, {}
+    window, days, group = {}, {}, {}
     if not rows:
-        return window, group
-    hdr_i, ap_col, cols = None, None, {}
+        return window, days, group
+    hdr_i, ap_col, day_col, cols = None, None, None, {}
     for i, r in enumerate(rows):
         if not r or r[0] in (None, "") or not _compact(r[0]).startswith("ACTIVITY"):
             continue
@@ -474,7 +498,9 @@ def _read_activity(rows, cres, subjects, issues):
             if j == 0 or v in (None, ""):
                 continue
             k = _compact(v)
-            if "PERIOD" in k or k == "ALLOWED":
+            if "DAY" in k and "PERIOD" not in k:
+                day_col = j
+            elif "PERIOD" in k or k == "ALLOWED":
                 ap_col = j
             else:
                 c = cres.resolve(v)
@@ -485,7 +511,7 @@ def _read_activity(rows, cres, subjects, issues):
             break
         cols = {}
     if hdr_i is None:
-        return window, group
+        return window, days, group
 
     subj_keys = {_compact(s): s for s in subjects}
 
@@ -508,6 +534,12 @@ def _read_activity(rows, cres, subjects, issues):
             continue
         row_no[subj] = row_no.get(subj, 0) + 1
         ps = parse_period_list(r[ap_col]) if ap_col is not None and ap_col < len(r) else None
+        ds = parse_day_list(r[day_col]) if day_col is not None and day_col < len(r) else None
+        if day_col is not None and day_col < len(r) and r[day_col] not in (None, "") and ds is None:
+            issues.append(Issue("warning",
+                                f"Activity Plan '{subj}': could not read Allowed Days "
+                                f"'{r[day_col]}' — use day names like MON,TUE or MON-THU",
+                                SHEET_ACTIVITY, subj, "Allowed Days"))
         for j, cl in enumerate_cols(cols, r):
             v = r[j]
             if v in (None, "", False):
@@ -523,7 +555,9 @@ def _read_activity(rows, cres, subjects, issues):
             group[(subj, cl)] = label
             if ps:
                 window[(subj, cl)] = ps
-    return window, group
+            if ds:
+                days[(subj, cl)] = ds
+    return window, days, group
 
 
 def enumerate_cols(cols, r):
@@ -607,7 +641,7 @@ def load_model(path, school="NRHS"):
     allot_raw = _read_allotment(sheet_rows(SHEET_ALLOT), cres, subjects, issues)
     p1_raw, study_raw = _read_p1(sheet_rows(SHEET_P1), cres, issues)
     order, fitment, blocked, soft = _read_leisure(sheet_rows(SHEET_LEISURE), issues)
-    activity_window, activity_group = _read_activity(
+    activity_window, activity_days, activity_group = _read_activity(
         sheet_rows(SHEET_ACTIVITY, required=False), cres, subjects, issues)
 
     # ---- resolve teacher names against the Leisure-Plan spelling ----
@@ -681,4 +715,5 @@ def load_model(path, school="NRHS"):
                  study_hour_classes=study_hour_classes,
                  fitment=fitment, blocked=blocked, soft_blocked=soft,
                  leisure_teachers=order, activity_window=activity_window,
-                 activity_group=activity_group, issues=issues, subjects_of=subjects_of)
+                 activity_days=activity_days, activity_group=activity_group,
+                 issues=issues, subjects_of=subjects_of)
