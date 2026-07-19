@@ -9,7 +9,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph,
                                 Spacer, PageBreak, KeepTogether)
 
-from .model import DAYS
+from .model import DAYS, GENERIC_TEACHERS
 
 PLABEL = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "Study Hour"]
 SUBJ_COLOR = {
@@ -33,29 +33,27 @@ _SEC = ParagraphStyle("sec", fontName="Helvetica-Bold", fontSize=15,
 
 
 def _class_grid(m, solution, c):
-    cfg = m.cfg
     g = [["—"] * 6 for _ in range(8)]
     for d in range(6):
         for p in range(1, 9):
             if (c, d, p) in solution:
                 s, t = solution[(c, d, p)]
-                g[p - 1][d] = (cfg.subj_abbr.get(s, s), t.replace(" Instructor", ""))
+                g[p - 1][d] = (m.abbr(s), t)
             elif p == 8 and c in m.study_hour_classes and m.has_p8(DAYS[d]):
                 g[p - 1][d] = ("STUDY", m.study_supervisor.get(c, ""))
     return g
 
 
 def _teacher_grid(m, solution, teacher):
-    cfg = m.cfg
     g = [["—"] * 6 for _ in range(8)]
     for (c, d, p), (s, t) in solution.items():
         if t == teacher:
-            g[p - 1][d] = (cfg.subj_abbr.get(s, s), cfg.class_display.get(c, c))
+            g[p - 1][d] = (m.abbr(s), c)
     for c in m.study_hour_classes:
         if m.study_supervisor.get(c) == teacher:
             for d in range(6):
                 if m.has_p8(DAYS[d]):
-                    g[7][d] = ("STUDY", cfg.class_display.get(c, c))
+                    g[7][d] = ("STUDY", c)
     return g
 
 
@@ -108,13 +106,13 @@ def write_pdf(path, m, solution, school=None):
                             title=f"{school} Timetable")
     story = [Paragraph(f"{school} — Class Timetables", _SEC), Spacer(1, 3 * mm)]
     for c in m.classes:
-        story.append(_grid_block(f"Class:  {cfg.class_display.get(c, c)}", _class_grid(m, solution, c)))
+        story.append(_grid_block(f"Class:  {c}", _class_grid(m, solution, c)))
 
     story.append(PageBreak())
     story.append(Paragraph(f"{school} — Teacher Timetables", _SEC))
     story.append(Spacer(1, 3 * mm))
     teachers = sorted(m.teachers) + sorted(
-        g for g in cfg.generic_teacher.values() if any(t == g for _, t in solution.values()))
+        g for g in GENERIC_TEACHERS if any(t == g for _, t in solution.values()))
     for who in teachers:
         story.append(_grid_block(f"Teacher:  {who}", _teacher_grid(m, solution, who)))
 

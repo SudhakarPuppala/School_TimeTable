@@ -20,7 +20,7 @@ from timetable.writer import (NAVY, DAYFILL, PERFILL, STUDYFILL, TEACHHDR,
                               WHITE_BOLD, _cell)
 from timetable.pdf import write_pdf
 
-PARALLEL = {"P.E", "Martial Arts", "P.E.T Instructor", "Karate Instructor"}
+PARALLEL = {"P.E", "MARTIAL ARTS", "Martial Arts", "P.E.T Instructor", "Karate Instructor"}
 
 
 def parse_class_sheet(ws):
@@ -130,9 +130,7 @@ def main():
     wb.save(args.out_xlsx)
     print(f"\nWrote {args.out_xlsx}")
 
-    ordered = [c for c in cfg.class_order if c in classes] + \
-              [c for c in classes if c not in cfg.class_order]
-    m = Model(cfg=cfg, classes=ordered, subjects=[], plan={}, teacher_of={},
+    m = Model(cfg=cfg, classes=classes, subjects=[], plan={}, teacher_of={},
               p1_teacher={}, study_supervisor=supervisors,
               teachers=sorted(t for t in teachers if t not in PARALLEL),
               study_hour_classes=list(supervisors), subjects_of={})

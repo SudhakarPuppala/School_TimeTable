@@ -6,7 +6,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from .model import Model, DAYS, N_DAYS, STUDY_PERIOD
+from .model import Model, DAYS, N_DAYS, STUDY_PERIOD, GENERIC_TEACHERS
 
 NAVY = PatternFill("solid", fgColor="2A4D69")
 DAYFILL = PatternFill("solid", fgColor="4B86B4")
@@ -26,10 +26,6 @@ DAY_FULL = {"MON": "MONDAY", "TUE": "TUESDAY", "WED": "WEDNESDAY",
 ROW_LABELS = [1, 2, 3, 4, 5, 6, 7, "Study Hour"]
 
 
-def _abbr(cfg, subj):
-    return cfg.subj_abbr.get(subj, subj[:4].upper())
-
-
 def _cell(ws, r, c, value, fill=None, font=None, align=CENTER):
     cell = ws.cell(r, c, value)
     if fill:
@@ -46,7 +42,7 @@ def write_class_sheet(wb, m: Model, solution):
     _cell(ws, 1, 1, "Day", NAVY, WHITE_BOLD)
     _cell(ws, 1, 2, "Period", NAVY, WHITE_BOLD)
     for j, c in enumerate(m.classes, start=3):
-        _cell(ws, 1, j, cfg.class_display.get(c, c), NAVY, WHITE_BOLD)
+        _cell(ws, 1, j, c, NAVY, WHITE_BOLD)
 
     row = 2
     for d in range(N_DAYS):
@@ -64,7 +60,7 @@ def write_class_sheet(wb, m: Model, solution):
                     text, fill = f"{ct}\n(CLASS)", STUDYFILL
                 elif (c, d, p) in solution:
                     s, t = solution[(c, d, p)]
-                    text = f"{t}\n({_abbr(cfg, s)})"
+                    text = f"{t}\n({m.abbr(s)})"
                     if is_study:
                         fill = STUDYFILL
                 else:
@@ -98,15 +94,15 @@ def write_teacher_sheet(wb, m: Model, solution):
 
     tgrid = defaultdict(lambda: [["" for _ in range(9)] for _ in range(N_DAYS)])
     for (c, d, p), (s, t) in solution.items():
-        tgrid[t][d][p] = f"{cfg.class_display.get(c, c)} ({_abbr(cfg, s)})"
+        tgrid[t][d][p] = f"{c} ({m.abbr(s)})"
     for c in m.study_hour_classes:
         t = m.study_supervisor.get(c)
         if t:
             for d in range(N_DAYS):
                 if m.has_p8(DAYS[d]):
-                    tgrid[t][d][STUDY_PERIOD] = cfg.class_display.get(c, c)
+                    tgrid[t][d][STUDY_PERIOD] = c
 
-    generic = [g for g in cfg.generic_teacher.values()
+    generic = [g for g in sorted(GENERIC_TEACHERS)
                if any(tt == g for _, tt in solution.values())]
     order = list(m.teachers) + generic
 

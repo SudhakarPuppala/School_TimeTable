@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "timetable-dashboard",
-      "runtimeExecutable": "streamlit",
-      "runtimeArgs": ["run", "dashboard.py", "--server.port", "8501", "--server.headless", "true"],
-      "port": 8501
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "dashboard.py", "--server.port", "8502", "--server.headless", "true"],
+      "port": 8502
     }
   ]
 }

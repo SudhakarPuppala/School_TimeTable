@@ -8,13 +8,11 @@ Usage:  python cross_check.py
 import re
 from collections import defaultdict
 
-from timetable.model import load_model, DAYS
+from timetable.model import load_model, DAYS, GENERIC_TEACHERS, INPUTS
+
 from timetable.solver import solve
 
-SCHOOLS = {
-    "NRHS": "NRHS/Requirements/NRHS_Information.xlsx",
-    "NRCS": "NRCS/Requirements/NRCS_information_New.xlsx",
-}
+SCHOOLS = dict(INPUTS)
 
 # Normalised names confirmed to be DIFFERENT people at each school (same name by
 # coincidence) — excluded from the shared-teacher clash check.
@@ -30,9 +28,8 @@ def occupancy(m, solution):
     """normalised-teacher -> {(day, period)} occupied (teaching or study-hour)."""
     occ = defaultdict(set)
     display = {}
-    generic = set(m.cfg.generic_teacher.values())
     for (c, d, p), (s, t) in solution.items():
-        if t in generic:
+        if t in GENERIC_TEACHERS:
             continue
         occ[norm(t)].add((d, p))
         display.setdefault(norm(t), t)

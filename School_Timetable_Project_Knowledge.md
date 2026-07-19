@@ -1,5 +1,16 @@
 # School Timetable Generation — Project Knowledge Base
 
+> **⚠ July 19 2026 — Leisure-Plan redesign.** The hardcoded rules described in
+> §3 below were **retired**. Teacher availability now comes entirely from the
+> new **Teacher Leisure Plan** sheet in each information workbook
+> (`Leisure Fitment`: **MUST** = hard block on the marked periods, **BEST** =
+> soft/leisure-gap preference; `Lunch Break` splits the day between P4 and P5).
+> Both schools use the same 4-sheet layout and one shared loader
+> (`timetable/model.py`), a pre-solve conflict checker
+> (`timetable/conflicts.py`) blocks generation and highlights offending cells
+> red in the dashboard, and the AI_Instructions.docx files were removed.
+> §§2–5 are kept for history only.
+
 ## Overview
 
 This document captures the complete methodology, data structures, rules, code patterns,

@@ -2,19 +2,16 @@
 from __future__ import annotations
 from collections import defaultdict
 
-from .model import Model, DAYS, N_DAYS, STUDY_PERIOD
+from .model import Model, DAYS, STUDY_PERIOD, GENERIC_TEACHERS
 
 
-def verify(m: Model, solution: dict, windows=None):
-    cfg = m.cfg
-    windows = windows if windows is not None else cfg.teacher_windows
+def verify(m: Model, solution: dict):
     errors, warnings = [], []
-    generic = set(cfg.generic_teacher.values())
 
-    # 1. no teacher double-booked (parallel activities exempt)
+    # 1. no teacher double-booked (generic instructors exempt)
     occ = defaultdict(list)
     for (c, d, p), (s, t) in solution.items():
-        if s in cfg.parallel_subjects or t in generic:
+        if t in GENERIC_TEACHERS:
             continue
         occ[(t, d, p)].append((c, s))
     for (t, d, p), lst in occ.items():
@@ -37,45 +34,47 @@ def verify(m: Model, solution: dict, windows=None):
         if v > 1:
             errors.append(f"SLOT CLASH: {k} has {v} subjects")
 
-    # 4. every subject's placements land only in real (existing) slots
+    # 4. placements only in existing slots
     for (c, d, p), (s, t) in solution.items():
-        if p == STUDY_PERIOD and DAYS[d] in cfg.no_p8_days:
+        if p == STUDY_PERIOD and DAYS[d] in m.cfg.no_p8_days:
             errors.append(f"NO-P8-DAY: {c} {s} at {DAYS[d]} P8 (no P8 that day)")
+        if p == STUDY_PERIOD and c in m.study_hour_classes:
+            errors.append(f"P8-TEACHING: {c} {s} at P8 but the class has a Study Hour")
 
-    # 5. window rules (against the effective windows actually used)
+    # 5. MUST leisure honoured
     for (c, d, p), (s, t) in solution.items():
-        if t in windows and p not in windows[t]:
-            errors.append(f"WINDOW: {t} teaching {c} at P{p} (allowed {sorted(windows[t])})")
-        if s in cfg.subject_windows and p not in cfg.subject_windows[s]:
-            errors.append(f"SUBJECT-WINDOW: {s} for {c} at P{p} (allowed {sorted(cfg.subject_windows[s])})")
+        if t in GENERIC_TEACHERS:
+            continue
+        if p in m.blocked.get(t, set()):
+            errors.append(f"LEISURE(MUST): {t} teaching {c} at {DAYS[d]} P{p} "
+                          f"but that period is Leisure in the plan")
 
-    # 6. Karate placement
+    # 6. study-hour supervisor not teaching at P8
+    supervisors = {m.study_supervisor[c] for c in m.study_hour_classes
+                   if m.study_supervisor.get(c)}
     for (c, d, p), (s, t) in solution.items():
-        if s == "Karate" and (DAYS[d] != cfg.karate_day or p != cfg.karate_period):
-            errors.append(f"KARATE misplaced: {c} at {DAYS[d]} P{p}")
-    for c in cfg.karate_classes:
-        if m.plan.get((c, "Karate"), 0) and (c, DAYS.index(cfg.karate_day), cfg.karate_period) not in solution:
-            errors.append(f"KARATE missing for {c} at {cfg.karate_day} P{cfg.karate_period}")
-
-    # 7. study-hour supervisor not teaching elsewhere at P8
-    supervisors = {m.study_supervisor[c] for c in m.study_hour_classes if c in m.study_supervisor}
-    for (c, d, p), (s, t) in solution.items():
-        if p == STUDY_PERIOD and t in supervisors and t != m.study_supervisor.get(c):
+        if p == STUDY_PERIOD and t in supervisors:
             errors.append(f"SUPERVISOR CLASH: {t} teaching {c} at P8 but supervises a study hour")
 
-    # ---- soft: leisure (study hour not counted) ----
-    teach = defaultdict(lambda: defaultdict(set))
+    # ---- soft: BEST leisure + whole-block runs (lunch splits the day) ----
+    busy = defaultdict(set)
     for (c, d, p), (s, t) in solution.items():
-        if s in cfg.parallel_subjects or t in generic:
+        if t in GENERIC_TEACHERS:
             continue
-        teach[t][d].add(p)
-    for t, days in teach.items():
-        for d, ps in days.items():
-            run = best = 0
-            for p in range(1, 9):
-                run = run + 1 if p in ps else 0
-                best = max(best, run)
-            if best >= 4:
-                warnings.append(f"LEISURE: {t} has {best} consecutive periods on {DAYS[d]}")
-
+        busy[(t, d)].add(p)
+        if p in m.soft_blocked.get(t, set()):
+            warnings.append(f"LEISURE(BEST): {t} teaches {c} at {DAYS[d]} P{p} "
+                            f"(marked Leisure, fitment BEST)")
+    for c in m.study_hour_classes:
+        t = m.study_supervisor.get(c)
+        if t:
+            for d in range(6):
+                if m.has_p8(DAYS[d]):
+                    busy[(t, d)].add(STUDY_PERIOD)
+    for (t, d), ps in sorted(busy.items()):
+        for block, label in (((1, 2, 3, 4), "morning P1-P4"),
+                             ((5, 6, 7, 8), "afternoon P5-P8")):
+            if all(p in ps for p in block):
+                warnings.append(f"LEISURE: {t} has no free period in the {label} "
+                                f"block on {DAYS[d]}")
     return errors, warnings

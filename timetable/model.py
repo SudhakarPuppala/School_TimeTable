@@ -1,12 +1,29 @@
-"""Data model + per-school configuration.
+"""Data model + data-driven loader.
 
-Two schools (NRHS, NRCS) have different rules AND different workbook layouts, so
-each has a `SchoolConfig` and a dedicated loader. Both loaders return a uniform
-`Model`, which the generic solver / verifier / writer / pdf consume via `m.cfg`.
+The rules engine was replaced by the *Teacher Leisure Plan* sheet: every
+teacher-availability rule now lives in the workbook, not in code.
+
+Each school's information workbook has 4 sheets (identical layout for both):
+  1. Weekly Period Plan       subject rows x class cols -> periods/week (+ Total row)
+  2. Teacher Allotment        subject rows x class cols -> teacher name
+  3. Period 1 teacher allotment  per class: Period-1 teacher + Study-Hour supervisor
+  4. Teacher Leisure Plan     per teacher: Leisure Fitment (MUST/BEST) + "Leisure"
+                              marks for Period 1..7 / Study Hour (+ Lunch Break)
+
+Semantics:
+  - MUST + "Leisure"  -> hard: the teacher can NOT be scheduled in that period.
+  - BEST + "Leisure"  -> soft: avoid that period if possible.
+  - BEST (in general) -> the solver spreads periods to leave leisure gaps.
+  - Lunch Break       -> everyone is free between P4 and P5 (informational).
+
+The loader never raises on messy data: it collects `Issue`s (also consumed by
+timetable.conflicts) so the dashboard can highlight the offending cells in red.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+import difflib
 import re
+
 import openpyxl
 
 # ---- common constants (same for every school) ----
@@ -14,63 +31,201 @@ DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
 N_DAYS = len(DAYS)
 PERIODS = [1, 2, 3, 4, 5, 6, 7, 8]
 STUDY_PERIOD = 8
+ALL_PERIODS = set(PERIODS)
 
+SHEET_PLAN = "Weekly Period Plan"
+SHEET_ALLOT = "Teacher Allotment"
+SHEET_P1 = "Period 1 teacher allotment"
+SHEET_LEISURE = "Teacher Leisure Plan"
 
-def _norm(s):
-    return re.sub(r"\s+", " ", str(s).strip()).lower()
+# Generic "whole class at once" instructors: exempt from double-booking because
+# an external instructor (or several) handles all classes.  These labels are a
+# data convention, not a scheduling rule.
+GENERIC_CANON = {
+    "PE": "P.E", "PET": "P.E", "PEINSTRUCTOR": "P.E", "PETINSTRUCTOR": "P.E",
+    "MARTIALARTS": "MARTIAL ARTS", "KARATE": "MARTIAL ARTS",
+    "KARATEINSTRUCTOR": "MARTIAL ARTS",
+}
+GENERIC_TEACHERS = {"P.E", "MARTIAL ARTS"}
+
+# subject (compact key) -> display abbreviation used on the output sheets
+SUBJ_ABBR = {
+    "TELUGU": "TEL", "HINDI": "HIN", "ENGLISH": "ENG",
+    "ENGGRAM": "GRAM", "ENGGRAMMAR": "GRAM",
+    "MATHS": "MATH", "MATHEMATICS": "MATH", "EVS": "EVS",
+    "PHYSICS": "PHY", "PHYCHE": "PHY", "CHEMISTRY": "CHEM", "CHEMISTY": "CHEM",
+    "BIOLOGY": "BIO", "SOCIAL": "SOC", "COMPUTER": "COMP",
+    "PET": "P.E.T", "GK": "G.K", "ORAL": "ORAL", "KARATE": "KAR",
+}
 
 
 # =====================================================================
-#  School configuration
+#  small text helpers
+# =====================================================================
+def _norm(s):
+    """Uppercase, collapse spaces, treat ',' as '.' (fixes 'K,ESWAR')."""
+    return re.sub(r"\s+", " ", str(s).replace(",", ".").strip()).upper()
+
+
+def _compact(s):
+    """Letters+digits only, uppercased: 'Naga mani' -> 'NAGAMANI'."""
+    return re.sub(r"[^A-Z0-9]", "", str(s).upper())
+
+
+def _core(s):
+    """Name without single-letter initials: 'K.ESWAR' -> 'ESWAR'."""
+    toks = re.split(r"[.\s]+", _norm(s))
+    keep = [t for t in toks if len(t) > 1]
+    return "".join(keep) or "".join(toks)
+
+
+def _first_tok(s):
+    toks = re.split(r"[.\s]+", _norm(s))
+    keep = [t for t in toks if len(t) > 1]
+    return keep[0] if keep else (toks[0] if toks else "")
+
+
+@dataclass
+class Issue:
+    """A data problem found while loading / checking.
+
+    severity: 'error' (blocks generation), 'warning', or 'info'.
+    sheet/row_key/col_key locate the offending cell for red highlighting
+    (row_key = subject / teacher / class label, col_key = column label).
+    """
+    severity: str
+    message: str
+    sheet: str = ""
+    row_key: str = ""
+    col_key: str = ""
+
+
+# =====================================================================
+#  name resolver (teacher names differ across sheets)
+# =====================================================================
+class NameResolver:
+    """Resolve raw teacher names to canonical ones (Leisure-Plan spelling).
+
+    Tiers: exact norm -> compact -> core (no initials) -> unique first token
+    -> unique fuzzy core match.  Non-exact resolutions are reported as info.
+    """
+
+    def __init__(self, canonical):
+        self.canonical = list(dict.fromkeys(canonical))
+        self.by_norm = {_norm(c): c for c in self.canonical}
+        self.by_compact = {}
+        self.by_core = {}
+        self.by_first = {}
+        for c in self.canonical:
+            self.by_compact.setdefault(_compact(c), []).append(c)
+            self.by_core.setdefault(_core(c), []).append(c)
+            self.by_first.setdefault(_first_tok(c), []).append(c)
+        self.cache = {}
+
+    def add(self, name):
+        if _norm(name) in self.by_norm:
+            return
+        self.canonical.append(name)
+        self.by_norm[_norm(name)] = name
+        self.by_compact.setdefault(_compact(name), []).append(name)
+        self.by_core.setdefault(_core(name), []).append(name)
+        self.by_first.setdefault(_first_tok(name), []).append(name)
+        self.cache.clear()
+
+    def resolve(self, raw):
+        """-> (canonical_or_None, tier).  tier: 'exact'|'match'|None."""
+        key = _norm(raw)
+        if key in self.cache:
+            return self.cache[key]
+        out = (None, None)
+        if key in self.by_norm:
+            out = (self.by_norm[key], "exact")
+        else:
+            for table, q in ((self.by_compact, _compact(raw)),
+                             (self.by_core, _core(raw)),
+                             (self.by_first, _first_tok(raw))):
+                hits = table.get(q, [])
+                if len(hits) == 1:
+                    out = (hits[0], "match")
+                    break
+            else:
+                close = difflib.get_close_matches(_core(raw), list(self.by_core), n=2, cutoff=0.84)
+                if len(close) == 1 and len(self.by_core[close[0]]) == 1:
+                    out = (self.by_core[close[0]][0], "match")
+        self.cache[key] = out
+        return out
+
+
+# =====================================================================
+#  School configuration (structural facts only — no scheduling rules)
 # =====================================================================
 @dataclass
 class SchoolConfig:
     name: str
-    class_order: list
-    class_display: dict
-    no_study_hour: set
-    subj_abbr: dict
-    parallel_subjects: set
-    generic_teacher: dict            # subject -> generic instructor name
-    class_teacher_subjects: set      # subjects taught by the class teacher if unassigned
-    teacher_windows: dict            # teacher -> allowed periods
-    default_window: set
-    subject_windows: dict            # subject -> allowed periods
-    karate_day: str
-    karate_period: int
-    karate_classes: set
-    pinned_period: dict              # (class, subject) -> preferred period
-    subject_inherit: dict            # subject -> fallback subject for teacher if unassigned
-    teacher_aliases: dict            # raw name -> canonical
-    morning_only: set                # teachers restricted to the morning (for relax pass)
     sheet_class_name: str
     sheet_teacher_name: str
     teacher_title: str
     no_p8_days: set = field(default_factory=set)   # days with no Period 8 (e.g. {"SAT"})
 
-    def canon_teacher(self, name):
-        n = re.sub(r"\s+", " ", str(name).strip())
-        return self.teacher_aliases.get(n.upper(), n)
+
+NRHS = SchoolConfig(
+    name="NRHS",
+    sheet_class_name="Class Time table", sheet_teacher_name="Teacher Time Table",
+    teacher_title="SCHOOL TEACHER TIMETABLE",
+    no_p8_days={"SAT"},
+)
+
+NRCS = SchoolConfig(
+    name="NRCS",
+    sheet_class_name="Class Time Table", sheet_teacher_name="Teacher Time Table",
+    teacher_title="NRCS TEACHER TIMETABLE",
+)
+
+SCHOOLS = {"NRHS": NRHS, "NRCS": NRCS}
+
+INPUTS = {
+    "NRHS": "NRHS/Requirements/NRHS_Information.xlsx",
+    "NRCS": "NRCS/Requirements/NRCS_information.xlsx",
+}
 
 
+# =====================================================================
+#  Model
+# =====================================================================
 @dataclass
 class Model:
     cfg: SchoolConfig
-    classes: list
+    classes: list                    # canonical order = Weekly Period Plan order
     subjects: list
     plan: dict                       # (class, subject) -> periods/week
     teacher_of: dict                 # (class, subject) -> teacher
     p1_teacher: dict                 # class -> Period-1 teacher
     study_supervisor: dict           # class -> Study-Hour supervisor
-    teachers: list
-    study_hour_classes: list
+    teachers: list                   # real teachers (no generic instructors)
+    study_hour_classes: list         # classes WITH a supervised study hour
+    fitment: dict = field(default_factory=dict)       # teacher -> MUST | BEST
+    blocked: dict = field(default_factory=dict)       # teacher -> {hard-blocked periods}
+    soft_blocked: dict = field(default_factory=dict)  # teacher -> {soft-avoid periods}
+    leisure_teachers: list = field(default_factory=list)   # sheet order
+    issues: list = field(default_factory=list)        # load-time Issues
     subjects_of: dict = field(default_factory=dict)
 
-    def teacher_window(self, teacher):
-        return self.cfg.teacher_windows.get(teacher, self.cfg.default_window)
+    # ---- helpers ----
+    def abbr(self, subj):
+        return SUBJ_ABBR.get(_compact(subj), str(subj)[:4].upper())
+
+    def class_display(self, cls):
+        return cls
+
+    def is_parallel(self, cls, subj):
+        return self.teacher_of.get((cls, subj)) in GENERIC_TEACHERS
+
+    def teacher_allowed(self, teacher):
+        """Periods the teacher may be scheduled in (hard leisure removed)."""
+        return ALL_PERIODS - self.blocked.get(teacher, set())
 
     def teachable_periods(self, cls):
-        return [1, 2, 3, 4, 5, 6, 7, 8] if cls in self.cfg.no_study_hour else [1, 2, 3, 4, 5, 6, 7]
+        return [1, 2, 3, 4, 5, 6, 7] if cls in self.study_hour_classes else [1, 2, 3, 4, 5, 6, 7, 8]
 
     def has_p8(self, day_name):
         return day_name not in self.cfg.no_p8_days
@@ -78,248 +233,339 @@ class Model:
     def has_study_hour(self, cls, day_name):
         return cls in self.study_hour_classes and self.has_p8(day_name)
 
+    def study_days(self):
+        return sum(1 for d in DAYS if self.has_p8(d))
 
-# =====================================================================
-#  NRHS configuration
-# =====================================================================
-NRHS = SchoolConfig(
-    name="NRHS",
-    class_order=["LKG", "UKG(A)", "UKG(B)", "Class 1(A)", "CLASS 1(B)", "Class 2",
-                 "Class 3", "Class 4", "Class 5", "Class 6", "Class 7",
-                 "Class 8", "Class 9", "Class 10"],
-    class_display={"LKG": "LKG", "UKG(A)": "UKG (A)", "UKG(B)": "UKG (B)",
-                   "Class 1(A)": "Class 1(A)", "CLASS 1(B)": "Class 1(B)", "Class 2": "Class 2",
-                   "Class 3": "Class 3", "Class 4": "Class 4", "Class 5": "Class 5",
-                   "Class 6": "Class 6", "Class 7": "Class 7", "Class 8": "Class 8",
-                   "Class 9": "Class 9", "Class 10": "Class 10"},
-    no_study_hour={"Class 8", "Class 9", "Class 10"},
-    subj_abbr={"Telugu": "TEL", "Hindi": "HIN", "English": "ENG", "Maths": "MATH", "EVS": "EVS",
-               "Physics": "PHY", "Chemistry": "CHEM", "Biology": "BIO", "Social": "SOC",
-               "Computer": "COMP", "P.E.T": "P.E.T", "G.K": "G.K", "ORAL": "ORAL", "Karate": "KAR"},
-    parallel_subjects={"P.E.T", "Karate"},
-    generic_teacher={"P.E.T": "P.E.T Instructor", "Karate": "Karate Instructor"},
-    class_teacher_subjects={"ORAL", "G.K"},
-    teacher_windows={"RIYA": {5, 6, 7, 8}, "SUNITHA": {5, 6, 7, 8},
-                     "D.GOWTHAM": {6, 7, 8}, "CHALAPATHI": {1, 2, 3}},
-    default_window={1, 2, 3, 4, 5, 6, 7},
-    subject_windows={"P.E.T": {6, 7}},
-    karate_day="THU", karate_period=7,
-    karate_classes={"Class 1(A)", "CLASS 1(B)", "Class 2", "Class 3", "Class 4",
-                    "Class 5", "Class 6", "Class 7", "Class 8"},
-    pinned_period={("Class 2", "Maths"): 7, ("Class 1(A)", "P.E.T"): 7},
-    subject_inherit={},
-    teacher_aliases={"S.GAYATRI": "S.GAYATHRI", "SUMANI": "D.SUMANI"},
-    morning_only=set(),
-    sheet_class_name="Class Time table", sheet_teacher_name="Teacher Time Table",
-    teacher_title="SCHOOL TEACHER TIMETABLE",
-    no_p8_days={"SAT"},
-)
+    def availability(self, teacher):
+        """Total weekly slots the teacher could possibly teach/supervise."""
+        allowed = self.teacher_allowed(teacher)
+        n = 0
+        for d in DAYS:
+            for p in allowed:
+                if p == STUDY_PERIOD and not self.has_p8(d):
+                    continue
+                n += 1
+        return n
 
-# =====================================================================
-#  NRCS configuration
-# =====================================================================
-NRCS = SchoolConfig(
-    name="NRCS",
-    class_order=["L.K.G", "U.K.G", "Class 1", "Class 2", "Class 3", "Class 4",
-                 "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"],
-    class_display={c: c for c in ["L.K.G", "U.K.G", "Class 1", "Class 2", "Class 3",
-                                  "Class 4", "Class 5", "Class 6", "Class 7", "Class 8",
-                                  "Class 9", "Class 10"]},
-    no_study_hour={"Class 10"},
-    subj_abbr={"Telugu": "TEL", "Hindi": "HIN", "English": "ENG", "Eng Gram": "GRAM",
-               "Maths": "MATH", "EVS": "EVS", "Physics": "PHY", "Chemisty": "CHEM",
-               "Biology": "BIO", "Social": "SOC", "Oral": "ORAL", "G.K": "G.K",
-               "Computer": "COMP", "P.E.T": "P.E.T", "Karate": "KAR"},
-    parallel_subjects={"P.E.T", "Karate"},
-    generic_teacher={"P.E.T": "P.E", "Karate": "Martial Arts"},
-    class_teacher_subjects={"Oral"},
-    teacher_windows={"Sonu": {5, 6, 7, 8}, "Gowtham": {2, 3},   # morning, not P1 & P4
-                     "Sunitha": {1, 2, 3, 4}, "Riya": {1, 2, 3, 4}, "Bheema": {1, 2, 3, 4},
-                     "Chalapathi": {5, 6, 7}},   # afternoon; disjoint from NRHS Chalapathi (P1-3)
-    default_window={1, 2, 3, 4, 5, 6, 7},
-    subject_windows={"P.E.T": {5, 6, 7}},
-    karate_day="THU", karate_period=6,
-    karate_classes={"Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
-                    "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"},
-    pinned_period={("L.K.G", "Oral"): 1},
-    subject_inherit={"Chemisty": "Physics", "Eng Gram": "English"},
-    teacher_aliases={},
-    morning_only={"Gowtham", "Sunitha", "Riya", "Bheema"},
-    sheet_class_name="Class Time Table", sheet_teacher_name="Teacher Time Table",
-    teacher_title="NRCS TEACHER TIMETABLE",
-)
-
-SCHOOLS = {"NRHS": NRHS, "NRCS": NRCS}
+    def teaching_load(self, teacher):
+        """(class, subject, n) triples this teacher is allotted."""
+        return [(c, s, n) for (c, s), n in self.plan.items()
+                if n > 0 and self.teacher_of.get((c, s)) == teacher]
 
 
 # =====================================================================
-#  helpers shared by loaders
+#  sheet sniffing
 # =====================================================================
-def _finalise(cfg, classes, subjects, plan, teacher_of, p1_teacher, study_supervisor):
-    # subject-inherit fallback (e.g. NRCS Chemisty -> Physics teacher)
-    for cl in classes:
-        for subj in subjects:
-            if plan.get((cl, subj), 0) == 0 or (cl, subj) in teacher_of:
-                continue
-            src = cfg.subject_inherit.get(subj)
-            if src and (cl, src) in teacher_of:
-                teacher_of[(cl, subj)] = teacher_of[(cl, src)]
-    # rule-based teachers for still-unassigned subjects
-    for cl in classes:
-        for subj in subjects:
-            if plan.get((cl, subj), 0) == 0 or (cl, subj) in teacher_of:
-                continue
-            if subj in cfg.generic_teacher:
-                teacher_of[(cl, subj)] = cfg.generic_teacher[subj]
-            elif subj in cfg.class_teacher_subjects:
-                teacher_of[(cl, subj)] = p1_teacher.get(cl, f"{cl} teacher")
-    for cl in p1_teacher:
-        study_supervisor.setdefault(cl, p1_teacher[cl])
-
-    teachers = sorted({t for t in teacher_of.values()
-                       if t not in cfg.generic_teacher.values()})
-    study_hour_classes = [c for c in classes if c not in cfg.no_study_hour]
-    subjects_of = {c: [s for s in subjects if plan.get((c, s), 0) > 0] for c in classes}
-    return Model(cfg=cfg, classes=classes, subjects=subjects, plan=plan,
-                 teacher_of=teacher_of, p1_teacher=p1_teacher,
-                 study_supervisor=study_supervisor, teachers=teachers,
-                 study_hour_classes=study_hour_classes, subjects_of=subjects_of)
+def _grid(ws):
+    return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
-def _read_plan(ws, cfg):
-    rows = list(ws.iter_rows(values_only=True))
-    hdr = rows[1]
-    plan_classes = [str(c).strip() for c in hdr[1:] if c is not None]
+def _read_plan(rows, issues):
+    """-> (classes, subjects, plan). Header = first row with >=3 filled cells
+    after col A. Skips the Total row (totals are recomputed)."""
+    hdr_i = None
+    for i, r in enumerate(rows):
+        if sum(1 for v in r[1:] if v not in (None, "")) >= 3:
+            hdr_i = i
+            break
+    if hdr_i is None:
+        issues.append(Issue("error", "Weekly Period Plan: no header row found", SHEET_PLAN))
+        return [], [], {}
+    col_class = {j: str(v).strip() for j, v in enumerate(rows[hdr_i])
+                 if j >= 1 and v not in (None, "")}
+    classes = list(col_class.values())
     plan, subjects = {}, []
-    for r in rows[2:]:
+    for r in rows[hdr_i + 1:]:
         subj = r[0]
-        if not subj or "total" in str(subj).strip().lower():
+        if subj in (None, ""):
             continue
         subj = str(subj).strip()
+        if _compact(subj).startswith("TOTAL"):
+            continue
         subjects.append(subj)
-        for j, cl in enumerate(hdr[1:], start=1):
-            if cl is None:
-                continue
-            v = r[j]
-            plan[(str(cl).strip(), subj)] = int(v) if v not in (None, "") else 0
-    classes = [c for c in cfg.class_order if c in plan_classes]
+        for j, cl in col_class.items():
+            v = r[j] if j < len(r) else None
+            try:
+                plan[(cl, subj)] = int(v) if v not in (None, "") else 0
+            except (TypeError, ValueError):
+                issues.append(Issue("error", f"'{v}' is not a number ({subj} / {cl})",
+                                    SHEET_PLAN, subj, cl))
+                plan[(cl, subj)] = 0
     return classes, subjects, plan
 
 
-# =====================================================================
-#  NRHS loader  (allotment = class rows x subject cols; P1 = label rows)
-# =====================================================================
-_NRHS_ALLOT_SUBJ = {"TELUGU": "Telugu", "HINDI": "Hindi", "ENGLISH": "English", "MATHS": "Maths",
-                    "EVS": "EVS", "PHYSICS": "Physics", "CHEMISTRY": "Chemistry",
-                    "BIOLOGY": "Biology", "SOCIAL": "Social", "COMPUTER": "Computer", "G.K": "G.K"}
-_NRHS_ALLOT_CLASS = {"L.K.G": "LKG", "U.K.G(A)": "UKG(A)", "U.K.G(B)": "UKG(B)",
-                     "Class 1(A)": "Class 1(A)", "Class 1(B)": "CLASS 1(B)"}
-_NRHS_P1_NAME = {"shekina": "SHEKINA", "bijili": "BIJILI", "maha lakshmi": "MAHA LAKSHMI",
-                 "chandrakala": "CHANDRAKALA", "surya devi": "SURYA DEVI", "satyaveni": "P.SATYAVENI",
-                 "navya": "N.NAVYA", "sai keerthi": "SAI KEERTHI", "gayatri": "S.GAYATHRI",
-                 "kamala devi": "R.KAMALA", "chandini": "CHANDINI", "eswari": "K.ESWAR",
-                 "lalitha": "M.LALITHA", "sumani": "D.SUMANI"}
-_NRHS_P1_CLASS = {"L.K.G": "LKG", "U.K.G 1": "UKG(A)", "U.K.G 2": "UKG(B)", "1(A)": "Class 1(A)",
-                  "1(B)": "CLASS 1(B)", "2": "Class 2", "3": "Class 3", "4": "Class 4",
-                  "5": "Class 5", "6": "Class 6", "7": "Class 7", "8": "Class 8",
-                  "9": "Class 9", "10": "Class 10"}
+class ClassResolver:
+    """Map class labels from other sheets onto the Weekly-Plan class names.
+    'U.K.G 1' -> 'UKG(A)' etc."""
 
+    def __init__(self, classes):
+        self.classes = classes
+        self.by_key = {_compact(c): c for c in classes}
 
-def _p1key(key):
-    if key in (None, ""):
+    def resolve(self, raw):
+        k = _compact(raw)
+        if k in self.by_key:
+            return self.by_key[k]
+        swap = k.translate(str.maketrans("12", "AB"))       # 'UKG1' -> 'UKGA'
+        if swap in self.by_key:
+            return self.by_key[swap]
+        hit = difflib.get_close_matches(k, list(self.by_key), n=2, cutoff=0.8)
+        if len(hit) == 1:
+            return self.by_key[hit[0]]
         return None
-    if isinstance(key, float) and key.is_integer():
-        key = int(key)
-    return str(key).strip()
 
 
-def load_nrhs(path, cfg):
-    wb = openpyxl.load_workbook(path, data_only=True)
-    classes, subjects, plan = _read_plan(wb["Weekly Period Plan"], cfg)
+def _class_columns(row, cres, start=1):
+    """-> {col_index: canonical class} for one header row."""
+    out = {}
+    for j, v in enumerate(row):
+        if j < start or v in (None, ""):
+            continue
+        c = cres.resolve(v)
+        if c:
+            out[j] = c
+    return out
 
-    ta = list(wb["Teacher Allotment"].iter_rows(values_only=True))
-    subj_cols = ta[0][1:]
-    teacher_of = {}
-    for r in ta[1:]:
+
+def _read_allotment(rows, cres, subjects, issues):
+    """-> {(class, subject_raw): teacher_raw} plus per-cell issue locations."""
+    hdr_i, cols = None, {}
+    for i, r in enumerate(rows):
+        cand = _class_columns(r, cres)
+        if len(cand) >= 3:
+            hdr_i, cols = i, cand
+            break
+    if hdr_i is None:
+        issues.append(Issue("error", "Teacher Allotment: no class header row found", SHEET_ALLOT))
+        return {}
+    # subject resolver: compact match, then prefix, then fuzzy
+    subj_keys = {_compact(s): s for s in subjects}
+    special = {"PHYCHE": "PHYSICS"}
+
+    def subj_resolve(raw):
+        k = _compact(raw)
+        k = special.get(k, k)
+        if k in subj_keys:
+            return subj_keys[k]
+        pref = [s for key, s in subj_keys.items() if key.startswith(k) or k.startswith(key)]
+        if len(pref) == 1:
+            return pref[0]
+        hit = difflib.get_close_matches(k, list(subj_keys), n=2, cutoff=0.8)
+        if len(hit) == 1:
+            return subj_keys[hit[0]]
+        return None
+
+    out = {}
+    for r in rows[hdr_i + 1:]:
         lbl = r[0]
-        if not lbl:
+        if lbl in (None, ""):
             continue
-        cl = _NRHS_ALLOT_CLASS.get(lbl, lbl)
-        for k, sc in enumerate(subj_cols, start=1):
-            if not sc:
-                continue
-            subj = _NRHS_ALLOT_SUBJ.get(sc, sc)
-            t = r[k]
-            if t not in (None, ""):
-                teacher_of[(cl, subj)] = cfg.canon_teacher(t)
+        subj = subj_resolve(lbl)
+        if subj is None:
+            issues.append(Issue("warning",
+                                f"Teacher Allotment row '{lbl}' does not match any "
+                                f"Weekly-Plan subject — row ignored",
+                                SHEET_ALLOT, str(lbl).strip()))
+            continue
+        for j, cl in cols.items():
+            v = r[j] if j < len(r) else None
+            if v not in (None, ""):
+                out[(cl, subj)] = str(v).strip()
+    return out
 
-    p1rows = list(wb["Period 1 teacher allotment"].iter_rows(values_only=True))
-    hdr = p1rows[0][1:]
-    p1_teacher, study_supervisor = {}, {}
-    for row in p1rows[1:]:
-        label = str(row[0]).strip().lower() if row[0] else ""
-        target = p1_teacher if label.startswith("period 1") else (
-            study_supervisor if label.startswith("study") else None)
+
+def _read_p1(rows, cres, issues):
+    """-> (p1_raw, study_raw): class -> raw teacher name.  Accepts both layouts:
+      A) label rows:  Class | ... / Period 1 Teacher | ... / Study Hour | ...
+      B) Day/Period:  Day | Period | classes...  with rows '1' and 'Study Hour'
+    """
+    p1_raw, study_raw = {}, {}
+    day_i = next((i for i, r in enumerate(rows)
+                  if r and _compact(r[0]) == "DAY" and len(r) > 1 and _compact(r[1]) == "PERIOD"), None)
+    if day_i is not None:                                    # layout B
+        cols = _class_columns(rows[day_i], cres, start=2)
+        for r in rows[day_i + 1:]:
+            lbl = _compact(r[1]) if len(r) > 1 and r[1] is not None else ""
+            target = p1_raw if lbl in ("1", "10") else (study_raw if lbl.startswith("STUDY") else None)
+            if target is None:
+                continue
+            for j, cl in cols.items():
+                v = r[j] if j < len(r) else None
+                if v not in (None, ""):
+                    target[cl] = str(v).strip()
+        return p1_raw, study_raw
+
+    hdr_i, cols = None, {}
+    for i, r in enumerate(rows):                             # layout A
+        cand = _class_columns(r, cres)
+        if len(cand) >= 3:
+            hdr_i, cols = i, cand
+            break
+    if hdr_i is None:
+        issues.append(Issue("warning", "Period 1 sheet: no class header row found", SHEET_P1))
+        return p1_raw, study_raw
+    for r in rows[hdr_i + 1:]:
+        lbl = _compact(r[0]) if r and r[0] is not None else ""
+        target = (p1_raw if lbl.startswith("PERIOD1") else
+                  (study_raw if lbl.startswith("STUDY") else None))
         if target is None:
             continue
-        for key, name in zip(hdr, row[1:]):
-            cl = _NRHS_P1_CLASS.get(_p1key(key))
-            if cl is None or name in (None, ""):
-                continue
-            target[cl] = cfg.canon_teacher(_NRHS_P1_NAME.get(_norm(name), str(name).strip()))
-    return _finalise(cfg, classes, subjects, plan, teacher_of, p1_teacher, study_supervisor)
+        for j, cl in cols.items():
+            v = r[j] if j < len(r) else None
+            if v not in (None, ""):
+                target[cl] = str(v).strip()
+    return p1_raw, study_raw
 
 
-# =====================================================================
-#  NRCS loader  (allotment = subject rows x class cols; P1 = Day/Period rows)
-# =====================================================================
-_NRCS_ALLOT_SUBJ = {"Telugu": "Telugu", "Hindi": "Hindi", "English": "English",
-                    "Eng Gram": "Eng Gram", "Maths": "Maths", "EVS": "EVS",
-                    "Phy/Che": "Physics", "Chemisty": "Chemisty", "Biology": "Biology",
-                    "Social": "Social", "G.K": "G.K", "Computer": "Computer",
-                    "P.E.T": "P.E.T", "Karate": "Karate", "Oral": "Oral"}
+LEISURE_COLS = ["Teacher Name", "Leisure Fitment", "Period 1", "Period 2", "Period 3",
+                "Period 4", "Lunch Break", "Period 5", "Period 6", "Period 7", "Study Hour"]
 
 
-def load_nrcs(path, cfg):
-    wb = openpyxl.load_workbook(path, data_only=True)
-    classes, subjects, plan = _read_plan(wb["Weekly Period Plan"], cfg)
-
-    ta = list(wb["Teacher Allotment"].iter_rows(values_only=True))
-    class_cols = [str(c).strip() if c else None for c in ta[0][1:]]
-    teacher_of = {}
-    for r in ta[1:]:
-        subj_lbl = r[0]
-        if not subj_lbl:
+def _read_leisure(rows, issues):
+    """-> (order, fitment, blocked, soft_blocked)."""
+    hdr_i = next((i for i, r in enumerate(rows)
+                  if r and r[0] and _compact(r[0]).startswith("TEACHERNAME")), None)
+    if hdr_i is None:
+        issues.append(Issue("error", "Teacher Leisure Plan: header row "
+                            "('Teacher Name | Leisure Fitment | ...') not found", SHEET_LEISURE))
+        return [], {}, {}, {}
+    fit_col, period_col = None, {}
+    for j, v in enumerate(rows[hdr_i]):
+        if v in (None, ""):
             continue
-        subj = _NRCS_ALLOT_SUBJ.get(str(subj_lbl).strip(), str(subj_lbl).strip())
-        for k, cl in enumerate(class_cols, start=1):
-            if not cl:
-                continue
-            t = r[k]
-            if t not in (None, ""):
-                teacher_of[(cl, subj)] = cfg.canon_teacher(t)
+        k = _compact(v)
+        if "FITM" in k:
+            fit_col = j
+        elif k.startswith("PERIOD"):
+            mnum = re.search(r"(\d+)", k)
+            if mnum:
+                period_col[j] = int(mnum.group(1))
+        elif k.startswith("STUDY"):
+            period_col[j] = STUDY_PERIOD
 
-    # Period-1 sheet: Day | Period | <class cols>; rows '1' and 'Study Hour'
-    p1rows = list(wb["Period 1 teacher allotment"].iter_rows(values_only=True))
-    class_hdr = [str(c).strip() if c else None for c in p1rows[0][2:]]
-    p1_teacher, study_supervisor = {}, {}
-    for row in p1rows[1:]:
-        period = row[1]
-        plabel = str(period).strip().lower() if period is not None else ""
-        target = (p1_teacher if plabel in ("1", "1.0") else
-                  (study_supervisor if plabel.startswith("study") else None))
-        if target is None:
+    order, fitment, blocked, soft = [], {}, {}, {}
+    for r in rows[hdr_i + 1:]:
+        name = r[0]
+        if name in (None, ""):
             continue
-        for cl, name in zip(class_hdr, row[2:]):
-            if cl is None or name in (None, ""):
+        t = _norm(name)
+        if t in fitment:
+            issues.append(Issue("error", f"Duplicate teacher '{t}' in Teacher Leisure Plan",
+                                SHEET_LEISURE, t, "Teacher Name"))
+            continue
+        fit = _compact(r[fit_col]) if fit_col is not None and fit_col < len(r) and r[fit_col] else "BEST"
+        if fit not in ("MUST", "BEST"):
+            issues.append(Issue("warning", f"{t}: unknown Leisure Fitment '{r[fit_col]}' — "
+                                f"treated as BEST", SHEET_LEISURE, t, "Leisure Fitment"))
+            fit = "BEST"
+        order.append(t)
+        fitment[t] = fit
+        marks = set()
+        for j, p in period_col.items():
+            v = r[j] if j < len(r) else None
+            if v in (None, ""):
                 continue
-            target[cl] = cfg.canon_teacher(name)
-    return _finalise(cfg, classes, subjects, plan, teacher_of, p1_teacher, study_supervisor)
+            if "LEISURE" in _compact(v):
+                marks.add(p)
+            else:
+                issues.append(Issue("warning",
+                                    f"{t}: unexpected value '{v}' in period column — "
+                                    f"only 'Leisure' (or empty) is understood",
+                                    SHEET_LEISURE, t,
+                                    "Study Hour" if p == STUDY_PERIOD else f"Period {p}"))
+        (blocked if fit == "MUST" else soft)[t] = marks
+    return order, fitment, blocked, soft
 
 
 # =====================================================================
-#  public entry point
+#  loader
 # =====================================================================
 def load_model(path, school="NRHS"):
     cfg = SCHOOLS[school]
-    return (load_nrcs if school == "NRCS" else load_nrhs)(path, cfg)
+    wb = openpyxl.load_workbook(path, data_only=True)
+    issues = []
+
+    def sheet_rows(name):
+        for ws in wb.worksheets:
+            if _compact(ws.title) == _compact(name):
+                return _grid(ws)
+        issues.append(Issue("error", f"Sheet '{name}' not found in workbook", name))
+        return []
+
+    classes, subjects, plan = _read_plan(sheet_rows(SHEET_PLAN), issues)
+    cres = ClassResolver(classes)
+    allot_raw = _read_allotment(sheet_rows(SHEET_ALLOT), cres, subjects, issues)
+    p1_raw, study_raw = _read_p1(sheet_rows(SHEET_P1), cres, issues)
+    order, fitment, blocked, soft = _read_leisure(sheet_rows(SHEET_LEISURE), issues)
+
+    # ---- resolve teacher names against the Leisure-Plan spelling ----
+    resolver = NameResolver(order)
+
+    def canon(raw, sheet, row_key, col_key):
+        g = GENERIC_CANON.get(_compact(raw))
+        if g:
+            return g
+        got, tier = resolver.resolve(raw)
+        if got is None:
+            t = _norm(raw)
+            issues.append(Issue("warning",
+                                f"Teacher '{raw}' is not in the Teacher Leisure Plan — "
+                                f"treated as BEST with no leisure periods",
+                                sheet, row_key, col_key))
+            resolver.add(t)
+            fitment.setdefault(t, "BEST")
+            soft.setdefault(t, set())
+            return t
+        if tier != "exact":
+            issues.append(Issue("info", f"Name '{raw}' matched to '{got}' ({sheet})",
+                                sheet, row_key, col_key))
+        return got
+
+    teacher_of = {}
+    for (cl, subj), raw in allot_raw.items():
+        teacher_of[(cl, subj)] = canon(raw, SHEET_ALLOT, subj, cl)
+    p1_teacher = {cl: canon(raw, SHEET_P1, cl, "Period 1 Teacher")
+                  for cl, raw in p1_raw.items()}
+    study_supervisor = {cl: canon(raw, SHEET_P1, cl, "Study Hour")
+                        for cl, raw in study_raw.items()}
+
+    # ---- fill data gaps by convention (reported, overridable in the sheet) ----
+    fills = {"PET": ("P.E", "generic P.E instructor (parallel activity)"),
+             "KARATE": ("MARTIAL ARTS", "generic Martial-Arts instructor (parallel activity)")}
+    inherit = {"ENGGRAM": "ENGLISH", "ENGGRAMMAR": "ENGLISH",
+               "CHEMISTRY": "PHYSICS", "CHEMISTY": "PHYSICS"}
+    class_teacher_subjects = {"ORAL", "GK"}
+    subj_by_key = {_compact(s): s for s in subjects}
+    for cl in classes:
+        for subj in subjects:
+            if plan.get((cl, subj), 0) == 0 or (cl, subj) in teacher_of:
+                continue
+            key = _compact(subj)
+            if key in fills:
+                teacher_of[(cl, subj)] = fills[key][0]
+                note = fills[key][1]
+            elif key in inherit and (cl, subj_by_key.get(inherit[key], "")) in teacher_of:
+                teacher_of[(cl, subj)] = teacher_of[(cl, subj_by_key[inherit[key]])]
+                note = f"inherited from {subj_by_key[inherit[key]]} teacher"
+            elif key in class_teacher_subjects and cl in p1_teacher:
+                teacher_of[(cl, subj)] = p1_teacher[cl]
+                note = "assigned to the class (Period-1) teacher"
+            else:
+                continue        # left unassigned -> conflicts.py reports an error
+            issues.append(Issue("info",
+                                f"{cl} · {subj}: no Teacher-Allotment entry — {note} "
+                                f"({teacher_of[(cl, subj)]})", SHEET_ALLOT, subj, cl))
+
+    teachers = sorted({t for t in teacher_of.values() if t not in GENERIC_TEACHERS})
+    for t in teachers:                       # teachers seen only in the allotment
+        fitment.setdefault(t, "BEST")
+        soft.setdefault(t, set())
+    study_hour_classes = [c for c in classes if study_supervisor.get(c)]
+    subjects_of = {c: [s for s in subjects if plan.get((c, s), 0) > 0] for c in classes}
+
+    return Model(cfg=cfg, classes=classes, subjects=subjects, plan=plan,
+                 teacher_of=teacher_of, p1_teacher=p1_teacher,
+                 study_supervisor=study_supervisor, teachers=teachers,
+                 study_hour_classes=study_hour_classes,
+                 fitment=fitment, blocked=blocked, soft_blocked=soft,
+                 leisure_teachers=order, issues=issues, subjects_of=subjects_of)
