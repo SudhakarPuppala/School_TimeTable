@@ -455,6 +455,13 @@ with st.sidebar:
     generate = st.button("⚙️  Generate timetable", type="primary", width="stretch")
     save_src = st.button("💾  Save edits to source workbook", width="stretch")
     auto_git = st.checkbox("⬆️ Auto commit & push to GitHub on save", value=True)
+    if auto_git:
+        if _github_token():
+            st.caption("🔑 GitHub token detected in Secrets — pushes will use it.")
+        else:
+            st.caption("🔓 No GitHub token in Secrets — pushes use local git "
+                       "credentials (fine on your PC; on Streamlit Cloud add "
+                       '`GITHUB_TOKEN = "..."` under Manage app → Settings → Secrets).')
     st.caption("Check = validate the current edits and highlight conflicts in red. "
                "Generate = conflict-check + solve. Save = write edits back to the workbook"
                " (and check them into GitHub when the box is ticked).")
