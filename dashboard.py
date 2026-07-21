@@ -481,10 +481,14 @@ with st.sidebar:
 if (st.session_state.get("school"), st.session_state.get("path")) != (school, input_path):
     st.session_state.school = school
     st.session_state.path = input_path
-    for k in ("frames", "result", "conflicts", "bad_cells"):
+    for k in ("frames", "result", "conflicts", "bad_cells", "gen_feedback"):
         st.session_state.pop(k, None)
 if "frames" not in st.session_state and os.path.exists(input_path):
     st.session_state.frames = read_frames(input_path)
+
+# prominent main-area banner for the last Generate attempt (filled by the
+# Generate handler further down; shown here at the top so it can't be missed)
+status_area = st.container()
 
 tab_data, tab_class, tab_teacher, tab_report = st.tabs(
     ["✏️ Edit data & conflicts", "📚 Class timetable", "👩‍🏫 Teacher timetable",
@@ -659,24 +663,50 @@ if save_src and "edited" in st.session_state:
 
 if generate and "edited" in st.session_state:
     m, conflicts = run_conflict_check()
-    if has_errors(conflicts):
-        st.sidebar.error("Conflicts found — fix the red cells first (see Edit tab).")
+    errs = [c for c in conflicts if c.severity == "error"]
+    if errs:
+        st.session_state.pop("result", None)          # clear any stale timetable
+        st.session_state.gen_feedback = ("blocked",
+            f"{len(errs)} conflict(s) block generation — fix these first "
+            f"(highlighted red in **✏️ Edit data & conflicts**):",
+            [c.message for c in errs])
+        st.sidebar.error(f"{len(errs)} conflict(s) — cannot generate. See the "
+                         f"banner and the Edit tab.")
     else:
-        with st.spinner("Solving…"):
-            try:
+        try:
+            with st.spinner("Solving… (this can take up to the time budget)"):
                 solution, status, obj, notes = solve(m, max_seconds=seconds, precheck=False)
                 errors, warnings = verify(m, solution)
                 out = os.path.join(tempfile.gettempdir(), f"{school}_Timetable.xlsx")
                 write_workbook(out, m, solution)
                 pdf_out = os.path.join(tempfile.gettempdir(), f"{school}_Timetable.pdf")
                 write_pdf(pdf_out, m, solution)
-                st.session_state.result = (m, solution, status, obj, errors, warnings + notes)
-                st.session_state.out = out
-                st.session_state.pdf = pdf_out
-                st.sidebar.success(f"Solved: {status} · {len(errors)} errors, "
-                                   f"{len(warnings)} warnings")
-            except Exception as e:
-                st.sidebar.error(f"Solve failed: {e}")
+            st.session_state.result = (m, solution, status, obj, errors, warnings + notes)
+            st.session_state.out = out
+            st.session_state.pdf = pdf_out
+            st.session_state.gen_feedback = ("success",
+                f"Solved: {status} — {len(errors)} hard error(s), {len(warnings)} "
+                f"warning(s). See the 📚 Class / 👩‍🏫 Teacher / ✅ Report tabs.", None)
+            st.sidebar.success(f"Solved: {status}")
+        except Exception as e:
+            st.session_state.pop("result", None)
+            st.session_state.gen_feedback = ("failed",
+                f"Generation failed: {e}", None)
+            st.sidebar.error("Generation failed — see the banner.")
+    st.rerun()          # repaint: banner, red cells (Edit tab), result tabs
+
+# render the Generate banner in the reserved top-of-page area
+_fb = st.session_state.get("gen_feedback")
+if _fb:
+    kind, text, items = _fb
+    with status_area:
+        if kind == "success":
+            st.success("✅ " + text)
+        elif kind == "blocked":
+            st.error("🚫 " + text + "\n\n" +
+                     "\n".join(f"- {i}" for i in items))
+        else:
+            st.error("❌ " + text)
 
 res = st.session_state.get("result")
 if res:
