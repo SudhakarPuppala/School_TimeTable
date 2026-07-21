@@ -15,10 +15,110 @@ Checks:
   7.  data-gap warnings (no supervisor / no Period-1 teacher / unused rows)
 """
 from __future__ import annotations
-from itertools import combinations
+from collections import defaultdict, deque
 
 from .model import (Model, Issue, DAYS, STUDY_PERIOD, GENERIC_TEACHERS,
                     SHEET_PLAN, SHEET_ALLOT, SHEET_P1, SHEET_LEISURE, SHEET_ACTIVITY)
+
+
+def _class_pack_deficit(m: Model, c, supervisors):
+    """Can class c place all its subject-periods into distinct slots, honouring
+    each subject's teacher-leisure ∩ activity window?  Returns None if feasible,
+    else (deficient_subjects, their_available_slots, need, demand) — the exact
+    over-constrained set from the max-flow min-cut.
+
+    Ignores cross-class teacher contention (that's checks 4/6); this is the
+    per-class necessary condition that pins down Activity-Plan / leisure squeezes.
+    """
+    teachable = set(m.teachable_periods(c))
+    subs, demand, options = [], {}, {}
+    for s in m.subjects_of.get(c, []):
+        n = m.plan.get((c, s), 0)
+        if n <= 0:
+            continue
+        t = m.teacher_of.get((c, s))
+        allow_p = set(teachable)
+        if t and t not in GENERIC_TEACHERS:
+            allow_p &= m.teacher_allowed(t)
+            if t in supervisors:
+                allow_p.discard(STUDY_PERIOD)
+        opt = set()
+        for d in range(len(DAYS)):
+            if not allow_p:
+                break
+            for p in allow_p:
+                if p == STUDY_PERIOD and DAYS[d] in m.cfg.no_p8_days:
+                    continue
+                if m.has_activity_window(s, c) and not m.activity_allows(s, c, d, p):
+                    continue
+                opt.add((d, p))
+        subs.append(s)
+        demand[s] = n
+        options[s] = opt
+    total = sum(demand.values())
+    if total == 0:
+        return None
+    slot_list = sorted(set().union(*options.values())) if options else []
+    slot_id = {sl: i for i, sl in enumerate(slot_list)}
+    N, M = len(subs), len(slot_list)
+    src, snk = 0, 1 + N + M
+    cap = defaultdict(int)
+    adj = defaultdict(set)
+
+    def add(u, v, w):
+        cap[(u, v)] += w
+        adj[u].add(v)
+        adj[v].add(u)
+
+    for i, s in enumerate(subs):
+        add(src, 1 + i, demand[s])
+        for sl in options[s]:
+            add(1 + i, 1 + N + slot_id[sl], 1)
+    for j in range(M):
+        add(1 + N + j, snk, 1)
+
+    flow = 0
+    while True:
+        parent = {src: None}
+        q = deque([src])
+        while q:
+            u = q.popleft()
+            if u == snk:
+                break
+            for v in adj[u]:
+                if v not in parent and cap[(u, v)] > 0:
+                    parent[v] = u
+                    q.append(v)
+        if snk not in parent:
+            break
+        v, path = snk, []
+        while parent[v] is not None:
+            path.append((parent[v], v))
+            v = parent[v]
+        bott = min(cap[e] for e in path)
+        for u, w in path:
+            cap[(u, w)] -= bott
+            cap[(w, u)] += bott
+        flow += bott
+    if flow == total:
+        return None
+
+    seen = {src}
+    q = deque([src])
+    while q:
+        u = q.popleft()
+        for v in adj[u]:
+            if v not in seen and cap[(u, v)] > 0:
+                seen.add(v)
+                q.append(v)
+    def_subs = [subs[i] for i in range(N) if (1 + i) in seen]
+    if not def_subs:
+        def_subs = subs
+    avail = set().union(*(options[s] for s in def_subs)) if def_subs else set()
+    need = sum(demand[s] for s in def_subs)
+    if need <= len(avail):                      # message wouldn't make sense; widen set
+        def_subs, avail, need = subs, set().union(*options.values()), total
+    return def_subs, sorted(avail), need, demand
 
 
 def _period_label(p):
@@ -116,67 +216,36 @@ def check_conflicts(m: Model):
                              f"marks their Study Hour as Leisure (MUST)",
                              SHEET_LEISURE, t, "Study Hour"))
 
-    # ---- 5. per-class window arithmetic (over (day, period) slot-sets) ----
-    # An "entry" is anything confined to a slot subset inside this class: a
-    # teacher (Leisure Plan periods) or an activity (Activity Plan days×periods).
+    # ---- 5. per-class packing feasibility (exact, via max-flow / Hall) ----
+    # Each class must place all its subject-periods into its own (day, period)
+    # slots, one subject per slot, where each subject may only use slots inside
+    # its teacher's leisure window AND its Activity-Plan window. This is a
+    # bipartite b-matching; if it has no perfect matching the timetable is
+    # impossible. The min-cut names the exact over-constrained subjects, so the
+    # user gets a precise message instead of a bare solver INFEASIBLE.
     for c in m.classes:
-        teachable = set(m.teachable_periods(c))
-
-        def slots(periods, day_set=None):
-            day_set = range(6) if day_set is None else day_set
-            return frozenset((d, p) for d in day_set for p in periods
-                             if p in teachable
-                             and not (p == STUDY_PERIOD and DAYS[d] in m.cfg.no_p8_days))
-
-        full = slots(teachable)
-        entries = []                       # (label, slotset, demand, sheet, row_key)
-        dem = {}
-        for s in m.subjects_of.get(c, []):
-            t = m.teacher_of.get((c, s))
-            n = m.plan[(c, s)]
-            act = m.activity_slots(s, c)   # union over the class's Activity rows
-            if act is not None:
-                ss = frozenset(act)
-                if t and t not in GENERIC_TEACHERS:
-                    allow = m.teacher_allowed(t) - ({STUDY_PERIOD} if t in supervisors else set())
-                    ss = frozenset((d, p) for d, p in ss if p in allow)
-                if n > len(ss):
-                    where = _describe_slots(m, act)
-                    out.append(Issue("error",
-                                     f"{c}: {s} needs {n} periods/week but its Activity-Plan "
-                                     f"window ({where}) only offers {len(ss)} slots",
-                                     SHEET_ACTIVITY, s, "Allowed Periods"))
-                entries.append((s, ss, n, SHEET_ACTIVITY, s))
-            elif t and t not in GENERIC_TEACHERS:
-                dem[t] = dem.get(t, 0) + n
-        for t, n in dem.items():
-            w = m.teacher_allowed(t) & teachable
-            if t in supervisors:
-                w -= {STUDY_PERIOD}
-            entries.append((t, slots(w), n, SHEET_LEISURE, t))
-        restricted = sorted({ss for _, ss, _, _, _ in entries if ss != full}, key=sorted)
-        for r in range(1, min(len(restricted), 3) + 1):
-            for combo in combinations(restricted, r):
-                u = frozenset().union(*combo)
-                cap = len(u)
-                inside = [e for e in entries if e[1] <= u]
-                need = sum(e[2] for e in inside)
-                if need > cap:
-                    ps = sorted({p for _, p in u})
-                    ds = sorted({d for d, _ in u})
-                    where = (f"{'/'.join(DAYS[d] for d in ds)} × "
-                             f"P{'/P'.join(str(p) for p in ps)}")
-                    who = ", ".join(f"{lbl} ({n})" for lbl, _, n, _, _ in sorted(
-                        inside, key=lambda e: e[0]))
-                    first = sorted(inside, key=lambda e: e[0])[0]
-                    out.append(Issue("error",
-                                     f"{c}: teachers/activities restricted to {where} need "
-                                     f"{need} periods but the class only has {cap} such "
-                                     f"slots — {who}. Free a leisure period, widen the "
-                                     f"activity days/periods, or reassign a subject",
-                                     first[3], first[4],
-                                     "Leisure Fitment" if first[3] == SHEET_LEISURE
-                                     else "Allowed Periods"))
+        deficit = _class_pack_deficit(m, c, supervisors)
+        if deficit is None:
+            continue
+        def_subs, def_slots, need, demand = deficit
+        avail = len(def_slots)
+        detail = ", ".join(f"{s} ({demand[s]})" for s in def_subs)
+        where = _describe_slots(m, def_slots) if def_slots else "no usable slot"
+        # blame the Activity Plan if any deficient subject is activity-limited,
+        # else the Leisure Plan (a teacher window is the binding constraint)
+        act_sub = next((s for s in def_subs if m.has_activity_window(s, c)), None)
+        if act_sub:
+            sheet, row, col = SHEET_ACTIVITY, act_sub, "Allowed Periods"
+        else:
+            binder = next((m.teacher_of.get((c, s)) for s in def_subs
+                           if m.teacher_of.get((c, s)) not in GENERIC_TEACHERS), None)
+            sheet, row, col = SHEET_LEISURE, (binder or def_subs[0]), "Leisure Fitment"
+        out.append(Issue("error",
+                         f"{c}: {detail} together need {need} period(s) but can only be "
+                         f"placed in {avail} slot(s) — {where}. Widen the Activity-Plan "
+                         f"days/periods or free a leisure period for these, or reduce the "
+                         f"Weekly Period Plan count",
+                         sheet, row, col))
 
     # ---- 7. data-gap warnings ----
     for c in m.classes:

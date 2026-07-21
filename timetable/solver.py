@@ -180,10 +180,19 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        # try to explain WHY: re-run the conflict check for a precise reason
+        errs = [c for c in check_conflicts(m) if c.severity == "error"]
+        if errs:
+            reasons = "\n".join(f"  - {c.message}" for c in errs[:8])
+            raise RuntimeError(
+                f"No timetable satisfies the current data. Blocking conflict(s):\n"
+                f"{reasons}")
         raise RuntimeError(
             f"No timetable satisfies the current data (solver status: "
-            f"{solver.StatusName(status)}). Run the conflict check and loosen the "
-            f"Teacher Leisure Plan or the Weekly Period Plan.")
+            f"{solver.StatusName(status)}), and no single class is over-constrained "
+            f"on its own — this is a cross-class clash: two or more classes need the "
+            f"same teacher in the same restricted period. Widen an Activity-Plan "
+            f"day/period window, or free a leisure period for a heavily shared teacher.")
 
     solution = {}
     for (c, s, d, p), v in x.items():
