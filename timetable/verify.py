@@ -49,16 +49,11 @@ def verify(m: Model, solution: dict):
             errors.append(f"LEISURE(MUST): {t} teaching {c} at {DAYS[d]} P{p} "
                           f"but that period is Leisure in the plan")
 
-    # 5b. Activity-Plan windows honoured (days × periods)
+    # 5b. Activity-Plan windows honoured (days × periods, union over rows)
     for (c, d, p), (s, t) in solution.items():
-        w = m.activity_window.get((s, c))
-        if w and p not in w:
+        if m.has_activity_window(s, c) and not m.activity_allows(s, c, d, p):
             errors.append(f"ACTIVITY-WINDOW: {s} for {c} at {DAYS[d]} P{p} "
-                          f"(allowed periods {sorted(w)})")
-        ds = m.activity_days.get((s, c))
-        if ds and d not in ds:
-            errors.append(f"ACTIVITY-DAY: {s} for {c} on {DAYS[d]} "
-                          f"(allowed days {[DAYS[i] for i in sorted(ds)]})")
+                          f"is outside its Activity-Plan window(s)")
 
     # 6. study-hour supervisor not teaching at P8
     supervisors = {m.study_supervisor[c] for c in m.study_hour_classes

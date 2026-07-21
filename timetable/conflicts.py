@@ -21,6 +21,24 @@ from .model import (Model, Issue, DAYS, STUDY_PERIOD, GENERIC_TEACHERS,
                     SHEET_PLAN, SHEET_ALLOT, SHEET_P1, SHEET_LEISURE, SHEET_ACTIVITY)
 
 
+def _period_label(p):
+    return "Study Hour" if p == STUDY_PERIOD else f"P{p}"
+
+
+def _describe_slots(m: Model, slotset):
+    """Compactly render a set of (day-index, period) slots, e.g.
+    'MON/WED/FRI × P6, SAT × P5'.  Groups days that share the same period-set."""
+    by_period_set = {}
+    for d in sorted({d for d, _ in slotset}):
+        ps = tuple(sorted(p for dd, p in slotset if dd == d))
+        by_period_set.setdefault(ps, []).append(d)
+    parts = []
+    for ps, days in sorted(by_period_set.items(), key=lambda kv: kv[1]):
+        parts.append(f"{'/'.join(DAYS[d] for d in days)} × "
+                     f"{'/'.join(_period_label(p) for p in ps)}")
+    return ", ".join(parts)
+
+
 def class_capacity(m: Model, cls):
     """Total schedulable slots for the class in a week."""
     cap = 6 * 7
@@ -116,21 +134,17 @@ def check_conflicts(m: Model):
         for s in m.subjects_of.get(c, []):
             t = m.teacher_of.get((c, s))
             n = m.plan[(c, s)]
-            w_act = m.activity_window.get((s, c))
-            d_act = m.activity_days.get((s, c))
-            if w_act or d_act:
-                w = (w_act or teachable) & teachable
+            act = m.activity_slots(s, c)   # union over the class's Activity rows
+            if act is not None:
+                ss = frozenset(act)
                 if t and t not in GENERIC_TEACHERS:
-                    w &= m.teacher_allowed(t)
-                    if t in supervisors:
-                        w -= {STUDY_PERIOD}
-                ss = slots(w, d_act)
+                    allow = m.teacher_allowed(t) - ({STUDY_PERIOD} if t in supervisors else set())
+                    ss = frozenset((d, p) for d, p in ss if p in allow)
                 if n > len(ss):
-                    win = ", ".join(f"P{p}" for p in sorted(w_act)) if w_act else "any period"
-                    dtx = ("/".join(DAYS[d] for d in sorted(d_act)) if d_act else "any day")
+                    where = _describe_slots(m, act)
                     out.append(Issue("error",
                                      f"{c}: {s} needs {n} periods/week but its Activity-Plan "
-                                     f"window ({dtx} × {win}) only offers {len(ss)} slots",
+                                     f"window ({where}) only offers {len(ss)} slots",
                                      SHEET_ACTIVITY, s, "Allowed Periods"))
                 entries.append((s, ss, n, SHEET_ACTIVITY, s))
             elif t and t not in GENERIC_TEACHERS:

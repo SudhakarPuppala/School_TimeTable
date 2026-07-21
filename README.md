@@ -50,6 +50,10 @@ python -m streamlit run dashboard.py        # interactive dashboard
 - Ticked classes may only do that activity inside the row's **days × periods**
   window (hard), and the solver **combines** their sessions — grouped classes do
   the activity together whenever the weekly counts allow.
+- A class may be ticked in **several rows**; its allowed slots are the **union**
+  of those rows' windows. Example: tick a class in a `MON,WED,FRI × P7` row and
+  a `SAT × P5` row and it can take that activity in P7 on Mon/Wed/Fri **or** P5
+  on Sat.
 - A class ticked in no row is scheduled independently with no restriction.
 - P.E.T / Karate are parallel whole-class activities (generic `P.E` /
   `MARTIAL ARTS` instructors, no double-booking constraint).

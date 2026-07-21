@@ -131,15 +131,11 @@ def main():
         if p in m.blocked.get(t, set()):
             fail.append(f"[LEISURE] {t} @ {DAYS[d]}P{p} ({c}) is marked Leisure (MUST)")
 
-    # 6b. Activity-Plan windows honoured (days × periods)
+    # 6b. Activity-Plan windows honoured (days × periods, union over rows)
     for (c, d, p), (t, s) in sol.items():
-        w = m.activity_window.get((s, c))
-        if w and p not in w:
-            fail.append(f"[ACTIVITY-WINDOW] {s} ({c}) @ {DAYS[d]}P{p} allowed {sorted(w)}")
-        ds = m.activity_days.get((s, c))
-        if ds and d not in ds:
-            fail.append(f"[ACTIVITY-DAY] {s} ({c}) on {DAYS[d]} "
-                        f"allowed {[DAYS[i] for i in sorted(ds)]}")
+        if m.has_activity_window(s, c) and not m.activity_allows(s, c, d, p):
+            fail.append(f"[ACTIVITY-WINDOW] {s} ({c}) @ {DAYS[d]}P{p} is outside its "
+                        f"Activity-Plan window(s)")
 
     # 7. Class sheet and Teacher sheet tally BOTH WAYS, generic instructors
     #    (P.E / MARTIAL ARTS combined sessions) included: every entry on either

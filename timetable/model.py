@@ -208,9 +208,13 @@ class Model:
     blocked: dict = field(default_factory=dict)       # teacher -> {hard-blocked periods}
     soft_blocked: dict = field(default_factory=dict)  # teacher -> {soft-avoid periods}
     leisure_teachers: list = field(default_factory=list)   # sheet order
-    activity_window: dict = field(default_factory=dict)    # (subject, class) -> {periods}
-    activity_days: dict = field(default_factory=dict)      # (subject, class) -> {day idx}
-    activity_group: dict = field(default_factory=dict)     # (subject, class) -> group label
+    # (subject, class) -> list of (days|None, periods|None) windows, one per
+    # Activity-Plan row the class is ticked in. A class may span several rows;
+    # its allowed slots are the UNION of all its windows.
+    activity_windows: dict = field(default_factory=dict)
+    # combined-session groups: list of (subject, label, frozenset(classes),
+    # days|None, periods|None) — one per Activity-Plan row with ticks.
+    activity_groups: list = field(default_factory=list)
     issues: list = field(default_factory=list)        # load-time Issues
     subjects_of: dict = field(default_factory=dict)
 
@@ -255,6 +259,41 @@ class Model:
         """(class, subject, n) triples this teacher is allotted."""
         return [(c, s, n) for (c, s), n in self.plan.items()
                 if n > 0 and self.teacher_of.get((c, s)) == teacher]
+
+    # ---- Activity Plan (days × periods, union over rows) ----
+    def has_activity_window(self, subj, cls):
+        return (subj, cls) in self.activity_windows
+
+    def activity_allows(self, subj, cls, d, p):
+        """Is (day d, period p) permitted for this activity/class?  True when
+        the class has no Activity-Plan window (unrestricted), else it must fall
+        inside at least one of the class's windows."""
+        wins = self.activity_windows.get((subj, cls))
+        if wins is None:
+            return True
+        for days, periods in wins:
+            if (days is None or d in days) and (periods is None or p in periods):
+                return True
+        return False
+
+    def activity_slots(self, subj, cls):
+        """Set of concrete (day-index, period) slots allowed for this
+        activity/class (union across the class's rows), honouring the class's
+        teachable periods and no-P8 days.  None = unrestricted."""
+        wins = self.activity_windows.get((subj, cls))
+        if wins is None:
+            return None
+        teachable = set(self.teachable_periods(cls))
+        out = set()
+        for days, periods in wins:
+            day_idx = range(N_DAYS) if days is None else days
+            per = teachable if periods is None else (periods & teachable)
+            for d in day_idx:
+                for p in per:
+                    if p == STUDY_PERIOD and not self.has_p8(DAYS[d]):
+                        continue
+                    out.add((d, p))
+        return out
 
 
 # =====================================================================
@@ -479,17 +518,16 @@ def _read_activity(rows, cres, subjects, issues):
     Ticked classes get that row's Allowed Days × Allowed Periods as a hard
     window and are scheduled together whenever the weekly counts allow.
     Blank days = any day; blank periods = any period.  A class ticked in no
-    row for its activity has no restriction and is not combined.  Legacy text
-    labels (e.g. 'Primary') in class cells still work: equal labels inside a
-    row form their own sub-group.
+    row for its activity has no restriction and is not combined.  A class may
+    be ticked in SEVERAL rows — its allowed slots are the UNION of those rows'
+    windows (e.g. P7 on Mon/Wed/Fri and P5 on Sat).
 
-    -> (activity_window {(subject, class): set-of-periods},
-        activity_days   {(subject, class): set-of-day-indices},
-        activity_group  {(subject, class): group-label})
+    -> (activity_windows {(subject, class): [(days|None, periods|None), ...]},
+        activity_groups  [(subject, label, frozenset(classes), days, periods)])
     """
-    window, days, group = {}, {}, {}
+    windows, groups = {}, []
     if not rows:
-        return window, days, group
+        return windows, groups
     hdr_i, ap_col, day_col, cols = None, None, None, {}
     for i, r in enumerate(rows):
         if not r or r[0] in (None, "") or not _compact(r[0]).startswith("ACTIVITY"):
@@ -511,7 +549,7 @@ def _read_activity(rows, cres, subjects, issues):
             break
         cols = {}
     if hdr_i is None:
-        return window, days, group
+        return windows, groups
 
     subj_keys = {_compact(s): s for s in subjects}
 
@@ -540,24 +578,18 @@ def _read_activity(rows, cres, subjects, issues):
                                 f"Activity Plan '{subj}': could not read Allowed Days "
                                 f"'{r[day_col]}' — use day names like MON,TUE or MON-THU",
                                 SHEET_ACTIVITY, subj, "Allowed Days"))
+        row_classes = []
         for j, cl in enumerate_cols(cols, r):
             v = r[j]
             if v in (None, "", False):
                 continue
-            label = (f"Group {row_no[subj]}" if _is_tick(v)
-                     else f"Group {row_no[subj]}: {str(v).strip()}")
-            if (subj, cl) in group:
-                issues.append(Issue("warning",
-                                    f"{cl} is ticked in more than one '{subj}' row of the "
-                                    f"Activity Plan — only the first row is used",
-                                    SHEET_ACTIVITY, subj, cl))
-                continue
-            group[(subj, cl)] = label
-            if ps:
-                window[(subj, cl)] = ps
-            if ds:
-                days[(subj, cl)] = ds
-    return window, days, group
+            row_classes.append(cl)
+            # accumulate this row's window onto the class (union across rows)
+            windows.setdefault((subj, cl), []).append((ds, ps))
+        if row_classes:
+            groups.append((subj, f"Group {row_no[subj]}",
+                           frozenset(row_classes), ds, ps))
+    return windows, groups
 
 
 def enumerate_cols(cols, r):
@@ -641,7 +673,7 @@ def load_model(path, school="NRHS"):
     allot_raw = _read_allotment(sheet_rows(SHEET_ALLOT), cres, subjects, issues)
     p1_raw, study_raw = _read_p1(sheet_rows(SHEET_P1), cres, issues)
     order, fitment, blocked, soft = _read_leisure(sheet_rows(SHEET_LEISURE), issues)
-    activity_window, activity_days, activity_group = _read_activity(
+    activity_windows, activity_groups = _read_activity(
         sheet_rows(SHEET_ACTIVITY, required=False), cres, subjects, issues)
 
     # ---- resolve teacher names against the Leisure-Plan spelling ----
@@ -714,6 +746,6 @@ def load_model(path, school="NRHS"):
                  study_supervisor=study_supervisor, teachers=teachers,
                  study_hour_classes=study_hour_classes,
                  fitment=fitment, blocked=blocked, soft_blocked=soft,
-                 leisure_teachers=order, activity_window=activity_window,
-                 activity_days=activity_days, activity_group=activity_group,
+                 leisure_teachers=order, activity_windows=activity_windows,
+                 activity_groups=activity_groups,
                  issues=issues, subjects_of=subjects_of)

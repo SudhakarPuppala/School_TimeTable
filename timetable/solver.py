@@ -58,18 +58,16 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
                 continue                                    # precheck reports this
             parallel = teacher in GENERIC_TEACHERS
             allowed = set(teachable)
-            if (s, c) in m.activity_window:          # Activity Plan: allowed periods
-                allowed &= m.activity_window[(s, c)]
-            act_days = m.activity_days.get((s, c))   # Activity Plan: allowed days
             if not parallel:
                 allowed &= m.teacher_allowed(teacher)
                 if teacher in supervisors:
                     allowed.discard(STUDY_PERIOD)
+            has_window = m.has_activity_window(s, c)  # Activity Plan: days × periods
             for d in range(N_DAYS):
-                if act_days is not None and d not in act_days:
-                    continue
                 for p in allowed:
                     if p == STUDY_PERIOD and not m.has_p8(DAYS[d]):
+                        continue
+                    if has_window and not m.activity_allows(s, c, d, p):
                         continue
                     v = model.NewBoolVar(f"x_{c}_{s}_{d}_{p}")
                     x[(c, s, d, p)] = v
@@ -146,13 +144,11 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
             penalties.append((3, v))
 
     # Activity Plan groups: combine sessions — minimise the number of distinct
-    # (day, period) sessions per (activity, group) so grouped classes do the
-    # activity together whenever the weekly counts allow.
-    groups = defaultdict(list)                       # (subject, label) -> classes
-    for (s, c), label in m.activity_group.items():
-        if c in m.classes and m.plan.get((c, s), 0) > 0:
-            groups[(s, label)].append(c)
-    for (s, label), cls_list in groups.items():
+    # (day, period) sessions per group so grouped classes do the activity
+    # together whenever the weekly counts allow.  One group per Activity-Plan
+    # row; a class may belong to several groups (it is ticked in several rows).
+    for gi, (s, label, cls_set, _days, _periods) in enumerate(m.activity_groups):
+        cls_list = [c for c in cls_set if c in m.classes and m.plan.get((c, s), 0) > 0]
         if len(cls_list) < 2:
             continue
         for d in range(N_DAYS):
@@ -160,7 +156,7 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
                 vs = [x[(c, s, d, p)] for c in cls_list if (c, s, d, p) in x]
                 if not vs:
                     continue
-                sess = model.NewBoolVar(f"sess_{s}_{label}_{d}_{p}")
+                sess = model.NewBoolVar(f"sess_{gi}_{d}_{p}")
                 for v in vs:
                     model.Add(sess >= v)
                 penalties.append((12, sess))
@@ -202,7 +198,8 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
     for t, d, p in soft_hits:
         notes.append(f"BEST leisure not honoured: {t} teaches at {d} P{p} "
                      f"(marked Leisure, fitment BEST)")
-    for (s, label), cls_list in sorted(groups.items()):
+    for s, label, cls_set, _days, _periods in m.activity_groups:
+        cls_list = [c for c in cls_set if c in m.classes and m.plan.get((c, s), 0) > 0]
         if len(cls_list) < 2:
             continue
         sess = defaultdict(list)
@@ -213,6 +210,6 @@ def solve(m: Model, max_seconds: int = 120, log: bool = False, precheck: bool = 
                         sess[(d, p)].append(c)
         detail = "; ".join(f"{DAYS[d]} P{p} ({len(cs)} classes)"
                            for (d, p), cs in sorted(sess.items()))
-        notes.append(f"{s} '{label}' group: {len(sess)} combined session(s) for "
+        notes.append(f"{s} '{label}': {len(sess)} combined session(s) for "
                      f"{len(cls_list)} classes — {detail}")
     return solution, solver.StatusName(status), solver.ObjectiveValue(), notes
